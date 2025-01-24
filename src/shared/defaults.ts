@@ -7,6 +7,9 @@ export function settings(): Settings {
         openaiKey: '',
         apiHost: 'https://api.openai.com',
 
+        deepseekKey: '',
+        deepseekModel: 'deepseek-reasoner',
+
         azureApikey: '',
         azureDeploymentName: '',
         azureDalleDeploymentName: 'dall-e-3',
