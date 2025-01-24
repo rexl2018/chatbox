@@ -1,6 +1,7 @@
 import { Divider, Box } from '@mui/material'
 import { ModelProvider, ModelSettings } from '../../../shared/types'
 import OpenAISetting from './OpenAISetting'
+import DeepSeekSetting from './DeepSeekSetting'
 import ChatboxAISetting from './ChatboxAISetting'
 import AIProviderSelect from '../../components/AIProviderSelect'
 import { OllamaHostInput, OllamaModelSelect } from './OllamaSetting'
@@ -29,6 +30,9 @@ export default function ModelSettingTab(props: ModelConfigProps) {
             )}
             {settingsEdit.aiProvider === ModelProvider.ChatboxAI && (
                 <ChatboxAISetting settingsEdit={settingsEdit} setSettingsEdit={setSettingsEdit} />
+            )}
+            {settingsEdit.aiProvider === ModelProvider.DeepSeek && (
+                <DeepSeekSetting settingsEdit={settingsEdit} setSettingsEdit={setSettingsEdit} />
             )}
             {settingsEdit.aiProvider === ModelProvider.Ollama && (
                 <>
