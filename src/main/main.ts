@@ -241,8 +241,12 @@ ipcMain.handle('getSettings', (event) => {
     return getSettings()
 })
 
+let credential: DefaultAzureCredential | null = null
+
 ipcMain.handle('getAccessToken', async (event) => {
-    const credential = new DefaultAzureCredential()
+    if (!credential) {
+        credential = new DefaultAzureCredential()
+    }
     const token = await credential.getToken('https://cognitiveservices.azure.com/.default')
     return token.token
 })
