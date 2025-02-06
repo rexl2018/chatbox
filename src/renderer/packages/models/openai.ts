@@ -1,6 +1,7 @@
 import { Message } from 'src/shared/types'
 import { ApiError, ChatboxAIAPIError } from './errors'
 import Base, { onResultChange } from './base'
+import { ElectronIPC } from '../../../shared/electron-types'
 
 interface Options {
     openaiKey: string
@@ -70,7 +71,7 @@ export default class OpenAI extends Base {
         const apiPath = this.options.apiPath || '/v1/chat/completions'
         const response = await this.post(
             `${this.options.apiHost}${apiPath}`,
-            this.getHeaders(),
+            await this.getHeaders(),
             requestBody,
             signal
         )
@@ -98,7 +99,7 @@ export default class OpenAI extends Base {
         const apiPath = this.options.apiPath || '/v1/chat/completions'
         const response = await this.post(
             `${this.options.apiHost}${apiPath}`,
-            this.getHeaders(),
+            await this.getHeaders(),
             requestBody,
             signal
         )
@@ -113,9 +114,14 @@ export default class OpenAI extends Base {
     }
 
 
-    getHeaders() {
+    async getHeaders() {
+        let token = this.options.openaiKey
+        if (token === undefined || token === '') {
+            const ipc: ElectronIPC = window.electronAPI!!
+            token = await ipc.invoke('getAccessToken')
+        }
         const headers: Record<string, string> = {
-            Authorization: `Bearer ${this.options.openaiKey}`,
+            Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json',
         }
         if (this.options.apiHost.includes('openrouter.ai')) {
@@ -129,6 +135,10 @@ export default class OpenAI extends Base {
 
 // Ref: https://platform.openai.com/docs/models/gpt-4
 export const openaiModelConfigs = {
+    'DeepSeek-R1': {
+        maxTokens: 8192,
+        maxContextTokens: 128_000,
+    },
     'gpt-3.5-turbo': {
         maxTokens: 4096,
         maxContextTokens: 16_385,
