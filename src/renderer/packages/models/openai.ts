@@ -8,6 +8,7 @@ interface Options {
     apiHost: string
     apiPath?: string
     model: Model | 'custom-model'
+    azureOpenAiModel?: string
     openaiCustomModel?: string
     temperature: number
     topP: number
@@ -28,6 +29,16 @@ export default class OpenAI extends Base {
         }
         if (this.options.apiPath && !this.options.apiPath.startsWith('/')) {
             this.options.apiPath = '/' + this.options.apiPath
+        }
+        if (this.options.apiHost && this.options.apiHost.includes('.openai.azure.com')) {
+            if (this.options.azureOpenAiModel && this.options.azureOpenAiModel !== '') {
+                const modelName = this.options.azureOpenAiModel
+                this.options.apiPath = `/openai/deployments/${modelName}/chat/completions?api-version=2024-02-15-preview`
+            } else {
+                this.options.apiPath = ''
+            }
+        } else {
+            this.options.apiPath = ''
         }
     }
 
