@@ -5,6 +5,7 @@ import Ollama from './ollama'
 import SiliconFlow from './siliconflow'
 import LMStudio from './lmstudio'
 import Claude from './claude'
+import DeepSeek from './deepseek'
 
 
 export function getModel(setting: Settings, config: Config) {
@@ -21,6 +22,8 @@ export function getModel(setting: Settings, config: Config) {
             return new Ollama(setting)
         case ModelProvider.SiliconFlow:
             return new SiliconFlow(setting)
+        case ModelProvider.DeepSeek:
+            return new DeepSeek(setting)
         default:
             throw new Error('Cannot find model with provider: ' + setting.aiProvider)
     }
@@ -33,6 +36,7 @@ export const aiProviderNameHash = {
     [ModelProvider.LMStudio]: 'LMStudio',
     [ModelProvider.Ollama]: 'Ollama',
     [ModelProvider.SiliconFlow]: 'SiliconCloud API',
+    [ModelProvider.DeepSeek]: 'DeepSeek API',
 }
 
 export const AIModelProviderMenuOptionList = [
@@ -45,6 +49,11 @@ export const AIModelProviderMenuOptionList = [
     {
         value: ModelProvider.OpenAI,
         label: aiProviderNameHash[ModelProvider.OpenAI],
+        disabled: false,
+    },
+    {
+        value: ModelProvider.DeepSeek,
+        label: aiProviderNameHash[ModelProvider.DeepSeek],
         disabled: false,
     },
     {
@@ -94,6 +103,8 @@ export function getModelDisplayName(settings: Settings, sessionType: SessionType
             return `LMStudio (${settings.lmStudioModel})`
         case ModelProvider.SiliconFlow:
             return `SiliconCloud (${settings.siliconCloudModel})`
+        case ModelProvider.DeepSeek:
+            return `DeepSeek (${settings.deepseekModel})`
         default:
             return 'unknown'
     }

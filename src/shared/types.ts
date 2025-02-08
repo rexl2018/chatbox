@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { Model } from '../renderer/packages/models/openai'
 import * as siliconflow from '../renderer/packages/models/siliconflow'
 import { ClaudeModel } from '../renderer/packages/models/claude'
+import { DeepSeekModel } from '../renderer/packages/models/deepseek'
 
 export const MessageRoleEnum = {
     System: 'system',
@@ -69,6 +70,7 @@ export enum ModelProvider {
     Ollama = 'ollama',
     SiliconFlow = 'silicon-flow',
     LMStudio = 'lm-studio',
+    DeepSeek = 'deepseek',
 }
 
 export interface ModelSettings {
@@ -79,6 +81,10 @@ export interface ModelSettings {
     apiHost: string
     model: Model | 'custom-model'
     openaiCustomModel?: string
+
+    // deepseek
+    deepseekKey: string
+    deepseekModel: DeepSeekModel
 
     //LMStudio
     lmStudioHost: string
@@ -115,6 +121,7 @@ export interface ModelSettings {
     siliconCloudKey: string
     siliconCloudModel: siliconflow.Model | 'custom-model'
 
+    // all
     temperature: number
     topP: number
     openaiMaxContextMessageCount: number
