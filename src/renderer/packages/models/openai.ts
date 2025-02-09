@@ -38,9 +38,7 @@ export default class OpenAI extends Base {
             } else {
                 this.options.apiPath = ''
             }
-        } else {
-            this.options.apiPath = ''
-        }
+        } 
     }
 
     async callChatCompletion(rawMessages: Message[], signal?: AbortSignal, onResultChange?: onResultChange): Promise<string> {
@@ -149,6 +147,7 @@ export default class OpenAI extends Base {
         }
         const headers: Record<string, string> = {
             Authorization: `Bearer ${token}`,
+            'api-key': `${token}`,
             'Content-Type': 'application/json',
         }
         if (this.options.apiHost.includes('openrouter.ai')) {

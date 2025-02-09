@@ -68,6 +68,20 @@ export default function OpenAISetting(props: ModelConfigProps) {
                     />
                     <TextFieldReset
                         margin="dense"
+                        label="API Path"
+                        type={"text"}
+                        fullWidth
+                        variant="outlined"
+                        value={settingsEdit.apiPath}
+                        placeholder="/v1/chat/completions"
+                        defaultValue='/v1/chat/completions'
+                        onValueChange={(value) => {
+                            value = value.trim()
+                            setSettingsEdit({ ...settingsEdit, apiPath: value })
+                        }}
+                    />
+                    <TextFieldReset
+                        margin="dense"
                         label="Azure OpenAI Model Name"
                         type={"text"}
                         fullWidth

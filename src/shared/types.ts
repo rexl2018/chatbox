@@ -79,6 +79,7 @@ export interface ModelSettings {
     // openai
     openaiKey: string
     apiHost: string
+    apiPath: string
     model: Model | 'custom-model'
     openaiCustomModel?: string
     azureOpenAiModel?: string
