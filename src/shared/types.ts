@@ -125,6 +125,7 @@ export interface ModelSettings {
     temperature: number
     topP: number
     openaiMaxContextMessageCount: number
+    openaiReasoningEffort: string
 }
 
 export interface Settings extends ModelSettings {
