@@ -21,6 +21,7 @@ import * as proxy from './proxy'
 import * as fs from 'fs-extra'
 import * as analystic from './analystic-node'
 import sanitizeFilename from 'sanitize-filename'
+import { DefaultAzureCredential } from '@azure/identity'
 
 if (process.platform === 'win32') {
     app.setAppUserModelId(app.name)
@@ -238,6 +239,16 @@ ipcMain.handle('getConfig', (event) => {
 
 ipcMain.handle('getSettings', (event) => {
     return getSettings()
+})
+
+let credential: DefaultAzureCredential | null = null
+
+ipcMain.handle('getAccessToken', async (event) => {
+    if (!credential) {
+        credential = new DefaultAzureCredential()
+    }
+    const token = await credential.getToken('https://cognitiveservices.azure.com/.default')
+    return token.token
 })
 
 ipcMain.handle('shouldShowAboutDialogWhenStartUp', (event) => {

@@ -35,6 +35,7 @@
         "email": "tohuangbin@gmail.com"
     },
     "devDependencies": {
+        "@azure/identity": "^4.6.0",
         "@electron/notarize": "^2.0.0",
         "@electron/rebuild": "^3.2.13",
         "@faker-js/faker": "^8.0.2",

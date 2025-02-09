@@ -66,6 +66,18 @@ export default function OpenAISetting(props: ModelConfigProps) {
                             setSettingsEdit({ ...settingsEdit, model, openaiCustomModel })
                         }
                     />
+                    <TextFieldReset
+                        margin="dense"
+                        label="Azure OpenAI Model Name"
+                        type={"text"}
+                        fullWidth
+                        variant="outlined"
+                        value={settingsEdit.azureOpenAiModel ?? ""}
+                        onValueChange={(value) => {
+                            value = value.trim()
+                            setSettingsEdit({ ...settingsEdit, azureOpenAiModel: value })
+                        }}
+                    />
 
                     {isReasoningModel && (
                         <ReasoningEffortSelect
