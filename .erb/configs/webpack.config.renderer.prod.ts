@@ -11,9 +11,9 @@ import webpack from 'webpack'
 import { BundleAnalyzerPlugin } from 'webpack-bundle-analyzer'
 import { merge } from 'webpack-merge'
 import JavaScriptObfuscator from 'webpack-obfuscator'
-import checkNodeEnv from '../scripts/check-node-env'
-import baseConfig from './webpack.config.base'
-import webpackPaths from './webpack.paths'
+import checkNodeEnv from '../scripts/check-node-env.js'
+import baseConfig from './webpack.config.base.ts'
+import webpackPaths from './webpack.paths.ts'
 
 checkNodeEnv('production')
 

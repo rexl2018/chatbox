@@ -1,6 +1,6 @@
-const { notarize } = require('@electron/notarize')
+import { notarize } from '@electron/notarize';
 
-exports.default = async function notarizeMacos(context) {
+export default async function notarizeMacos(context) {
     const { electronPlatformName, appOutDir } = context
     if (electronPlatformName !== 'darwin') {
         return
