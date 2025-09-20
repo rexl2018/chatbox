@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import type { Client } from '@libsql/client'
 import { LibSQLVector } from '@mastra/core/vector/libsql'
 import { app } from 'electron'
@@ -19,7 +20,7 @@ if (!fs.existsSync(dbDir)) {
 
 // Polyfill for mastra
 if (typeof global.crypto === 'undefined' || !('subtle' in global.crypto)) {
-  global.crypto = require('node:crypto')
+  global.crypto = crypto as any
 }
 
 let db: Client

@@ -111,6 +111,7 @@ export async function parseFile(filePath: string) {
 }
 
 export async function parseEpub(filePath: string): Promise<string> {
+  const Epub = (await import('epub')).default
   return new Promise((resolve, reject) => {
     const epub = new Epub(filePath)
 

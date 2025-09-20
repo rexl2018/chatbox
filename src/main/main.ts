@@ -36,7 +36,7 @@ import * as windowState from './window_state'
 
 // Only import knowledge-base module if not on win32 arm64 (libsql doesn't support win32 arm64)
 if (!(process.platform === 'win32' && process.arch === 'arm64')) {
-  import('./knowledge-base')
+  import('./knowledge-base/index.ts')
 }
 
 // 这行代码是解决 Windows 通知的标题和图标不正确的问题，标题会错误显示成 electron.app.Chatbox
@@ -205,15 +205,18 @@ function destroyTray() {
 
 // --------- 开发模式 ---------
 
+import sourceMapSupport from 'source-map-support'
+
 if (process.env.NODE_ENV === 'production') {
-  const sourceMapSupport = require('source-map-support')
   sourceMapSupport.install()
 }
 
 const isDebug = process.env.NODE_ENV === 'development' || process.env.DEBUG_PROD === 'true'
 
 if (isDebug) {
-  require('electron-debug')()
+  Promise.resolve().then(() => import('electron-debug')).then((electronDebug) => {
+    electronDebug.default()
+  })
 }
 
 // const installExtensions = async () => {
