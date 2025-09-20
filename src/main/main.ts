@@ -36,7 +36,11 @@ import * as windowState from './window_state'
 
 // Only import knowledge-base module if not on win32 arm64 (libsql doesn't support win32 arm64)
 if (!(process.platform === 'win32' && process.arch === 'arm64')) {
-  import('./knowledge-base/index.ts')
+  try {
+    require('./knowledge-base/index.ts')
+  } catch (err) {
+    log.error('Knowledge base module failed to load, feature will be disabled.', err)
+  }
 }
 
 // 这行代码是解决 Windows 通知的标题和图标不正确的问题，标题会错误显示成 electron.app.Chatbox
