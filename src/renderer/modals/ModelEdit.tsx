@@ -1,5 +1,5 @@
 import NiceModal, { useModal } from '@ebay/nice-modal-react'
-import { Button, Checkbox, Flex, Modal, Stack, Text, TextInput, Select } from '@mantine/core'
+import { Button, Checkbox, Flex, Modal, Stack, Text, TextInput, Select, NumberInput } from '@mantine/core'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ProviderModelInfo } from 'src/shared/types'
@@ -13,6 +13,9 @@ const ModelEdit = NiceModal.create((props: { model?: ProviderModelInfo }) => {
   const [nickname, setNickname] = useState(props.model?.nickname || '')
   const [capabilities, setCapabilities] = useState(props.model?.capabilities || [])
   const [type, setType] = useState<ProviderModelInfo['type']>(props.model?.type || 'chat')
+  const [maxTokens, setMaxTokens] = useState<number | undefined>(props.model?.maxTokens)
+  const [temperature, setTemperature] = useState<number | undefined>(props.model?.temperature)
+  const [topP, setTopP] = useState<number | undefined>(props.model?.topP)
 
   const typeOptions = [
     { value: 'chat', label: t('Chat')?.toString() ?? 'Chat' },
@@ -25,6 +28,9 @@ const ModelEdit = NiceModal.create((props: { model?: ProviderModelInfo }) => {
     setNickname(props.model?.nickname || '')
     setCapabilities(props.model?.capabilities || [])
     setType(props.model?.type || 'chat')
+    setMaxTokens(props.model?.maxTokens)
+    setTemperature(props.model?.temperature)
+    setTopP(props.model?.topP)
   }, [props])
 
   const handleCancel = () => {
@@ -38,6 +44,9 @@ const ModelEdit = NiceModal.create((props: { model?: ProviderModelInfo }) => {
       type,
       nickname,
       capabilities,
+      maxTokens,
+      temperature,
+      topP,
     })
     modal.hide()
   }
@@ -91,6 +100,53 @@ const ModelEdit = NiceModal.create((props: { model?: ProviderModelInfo }) => {
             onChange={(v) => setType(v as ProviderModelInfo['type'])}
           />
         </Stack>
+
+        {/* Chat Model Parameters */}
+        {type === 'chat' && (
+          <>
+            {/* Temperature */}
+            <Stack gap="xs">
+              <Text fw="600">{t('Temperature')}</Text>
+              <NumberInput
+                placeholder={t('Use global default') || 'Use global default'}
+                value={temperature}
+                onChange={(value) => setTemperature(typeof value === 'number' ? value : undefined)}
+                min={0}
+                max={2}
+                step={0.1}
+                decimalScale={1}
+              />
+            </Stack>
+
+            {/* Top P */}
+            <Stack gap="xs">
+              <Text fw="600">Top P</Text>
+              <NumberInput
+                placeholder={t('Use global default') || 'Use global default'}
+                value={topP}
+                onChange={(value) => setTopP(typeof value === 'number' ? value : undefined)}
+                min={0}
+                max={1}
+                step={0.1}
+                decimalScale={1}
+              />
+            </Stack>
+
+            {/* Max Output Tokens */}
+            <Stack gap="xs">
+              <Text fw="600">{t('Max Output Tokens')}</Text>
+              <NumberInput
+                placeholder={t('Use default (4095)') || 'Use default (4095)'}
+                value={maxTokens}
+                onChange={(value) => setMaxTokens(typeof value === 'number' ? value : undefined)}
+                min={1}
+                max={200000}
+                step={1024}
+                allowDecimal={false}
+              />
+            </Stack>
+          </>
+        )}
 
         {/* Capabilities */}
         {type === 'chat' && (

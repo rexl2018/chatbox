@@ -105,8 +105,40 @@ export default abstract class AbstractAISDKModel implements ModelInterface {
     return true
   }
 
+  protected getCallSettings() {
+    return {
+      temperature: this.options.temperature,
+      topP: this.options.topP,
+      maxTokens: this.options.maxTokens || 4095,
+    }
+  }
+
+  protected abstract getProvider(
+    options: CallChatCompletionOptions
+  ): Pick<Provider, 'languageModel'> & Partial<Pick<Provider, 'textEmbeddingModel' | 'imageModel'>>
+
+  protected abstract getChatModel(options: CallChatCompletionOptions): LanguageModelV1
+
+  protected getImageModel(): ImageModel | null {
+    return null
+  }
+
+  protected getTextEmbeddingModel(options: CallChatCompletionOptions): EmbeddingModel<string> | null {
+    const provider = this.getProvider(options)
+    if (provider.textEmbeddingModel) {
+      return provider.textEmbeddingModel(this.options.model.modelId)
+    }
+    return null
+  }
+
+  public isSupportSystemMessage() {
+    return true
+  }
+
   protected getCallSettings(_options: CallChatCompletionOptions): CallSettings {
-    return {}
+    return {
+      maxTokens: 4095,
+    }
   }
 
   public async chat(messages: CoreMessage[], options: CallChatCompletionOptions): Promise<StreamTextResult> {

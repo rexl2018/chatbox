@@ -184,6 +184,7 @@ export type SessionSettings = Partial<{
   dalleStyle: 'vivid' | 'natural'
   imageGenerateNum: number // 生成图片的数量
   providerOptions?: ProviderOptions
+  useSessionOverrides?: boolean // toggle开关，控制是否使用会话级别的参数覆盖
 }>
 
 export interface Session {
@@ -270,6 +271,9 @@ export type ProviderModelInfo = {
   capabilities?: ('vision' | 'reasoning' | 'tool_use' | 'web_search')[]
   contextWindow?: number
   maxOutput?: number
+  maxTokens?: number
+  temperature?: number
+  topP?: number
 }
 
 export type BuiltinProviderBaseInfo = {

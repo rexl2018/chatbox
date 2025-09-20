@@ -18,7 +18,7 @@ import { useAtomValue } from 'jotai'
 import { pick } from 'lodash'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { chatSessionSettings, pictureSessionSettings } from 'src/shared/defaults'
+import { chatSessionSettings, pictureSessionSettings, SystemProviders } from 'src/shared/defaults'
 import {
   createMessage,
   isChatSession,
@@ -544,6 +544,41 @@ export function ChatConfig({
 }) {
   const { t } = useTranslation()
 
+  // 获取当前模型的默认设置
+  const getCurrentModelDefaults = (): { maxTokens?: number; temperature?: number; topP?: number } => {
+    if (!settings?.provider || !settings?.modelId) return {}
+    
+    // 从用户自定义的模型中查找
+    const userModel = globalSettings.providers?.[settings.provider]?.models?.find(
+      (m) => m.modelId === settings.modelId
+    )
+    if (userModel) {
+      return {
+        maxTokens: userModel.maxTokens,
+        temperature: userModel.temperature,
+        topP: userModel.topP,
+      }
+    }
+    
+    // 从系统默认模型中查找
+    const systemProvider = SystemProviders.find((p) => p.id === settings.provider)
+    const systemModel = systemProvider?.defaultSettings?.models?.find(
+      (m) => m.modelId === settings.modelId
+    )
+    if (systemModel) {
+      return {
+        maxTokens: systemModel.maxOutput, // 注意这里用的是maxOutput
+        temperature: systemModel.temperature,
+        topP: systemModel.topP,
+      }
+    }
+    
+    return {}
+  }
+
+  const modelDefaults = getCurrentModelDefaults()
+  const useOverrides = settings?.useSessionOverrides ?? false
+
   return (
     <Stack gap="md">
       <MaxContextMessageCountSlider
@@ -551,6 +586,34 @@ export function ChatConfig({
         onChange={(v) => onSettingsChange({ maxContextMessageCount: v })}
       />
 
+      {/* Toggle开关 */}
+      <Stack gap="xs" py="xs">
+        <Flex align="center" justify="space-between" gap="xs">
+          <Flex align="center" gap="xs">
+            <Text size="sm" fw="600">
+              {t('Override Model Settings')}
+            </Text>
+            <Tooltip
+              label={t(
+                'When enabled, session-level settings will override model defaults. When disabled, model settings take priority.'
+              )}
+              withArrow={true}
+              maw={320}
+              className="!whitespace-normal"
+              zIndex={3000}
+              events={{ hover: true, focus: true, touch: true }}
+            >
+              <IconInfoCircle size={20} className="text-[var(--mantine-color-chatbox-tertiary-text)]" />
+            </Tooltip>
+          </Flex>
+          <Switch
+            checked={useOverrides}
+            onChange={(v) => onSettingsChange({ useSessionOverrides: v.target.checked })}
+          />
+        </Flex>
+      </Stack>
+
+      {/* Temperature */}
       <Stack gap="xs">
         <Flex align="center" gap="xs">
           <Text size="sm" fw="600">
@@ -568,11 +631,27 @@ export function ChatConfig({
           >
             <IconInfoCircle size={20} className="text-[var(--mantine-color-chatbox-tertiary-text)]" />
           </Tooltip>
+          {!useOverrides && modelDefaults.temperature && (
+            <Text size="xs" c="dimmed">
+              ({t('Model default')}: {modelDefaults.temperature})
+            </Text>
+          )}
         </Flex>
 
-        <SliderWithInput value={settings?.temperature} onChange={(v) => onSettingsChange({ temperature: v })} max={2} />
+        {useOverrides ? (
+          <SliderWithInput 
+            value={settings?.temperature} 
+            onChange={(v) => onSettingsChange({ temperature: v })} 
+            max={2}
+          />
+        ) : (
+          <Text size="sm" c="dimmed" style={{ textAlign: 'center', padding: '8px' }}>
+            {t('Using model default')}
+          </Text>
+        )}
       </Stack>
 
+      {/* Top P */}
       <Stack gap="xs">
         <Flex align="center" gap="xs">
           <Text size="sm" fw="600">
@@ -590,11 +669,27 @@ export function ChatConfig({
           >
             <IconInfoCircle size={20} className="text-[var(--mantine-color-chatbox-tertiary-text)]" />
           </Tooltip>
+          {!useOverrides && modelDefaults.topP && (
+            <Text size="xs" c="dimmed">
+              ({t('Model default')}: {modelDefaults.topP})
+            </Text>
+          )}
         </Flex>
 
-        <SliderWithInput value={settings?.topP} onChange={(v) => onSettingsChange({ topP: v })} max={1} />
+        {useOverrides ? (
+          <SliderWithInput 
+            value={settings?.topP} 
+            onChange={(v) => onSettingsChange({ topP: v })} 
+            max={1}
+          />
+        ) : (
+          <Text size="sm" c="dimmed" style={{ textAlign: 'center', padding: '8px' }}>
+            {t('Using model default')}
+          </Text>
+        )}
       </Stack>
 
+      {/* Max Output Tokens */}
       <Flex justify="space-between" align="center">
         <Flex align="center" gap="xs">
           <Text size="sm" fw="600">
@@ -612,17 +707,28 @@ export function ChatConfig({
           >
             <IconInfoCircle size={20} className="text-[var(--mantine-color-chatbox-tertiary-text)]" />
           </Tooltip>
+          {!useOverrides && modelDefaults.maxTokens && (
+            <Text size="xs" c="dimmed">
+              ({t('Model default')}: {modelDefaults.maxTokens})
+            </Text>
+          )}
         </Flex>
 
-        <LazyNumberInput
-          width={96}
-          value={settings?.maxTokens}
-          onChange={(v) => onSettingsChange({ maxTokens: typeof v === 'number' ? v : undefined })}
-          min={0}
-          step={1024}
-          allowDecimal={false}
-          placeholder={t('Not set') || ''}
-        />
+        {useOverrides ? (
+          <LazyNumberInput
+            width={96}
+            value={settings?.maxTokens}
+            onChange={(v) => onSettingsChange({ maxTokens: typeof v === 'number' ? v : undefined })}
+            min={0}
+            step={1024}
+            allowDecimal={false}
+            placeholder={t('Not set') || ''}
+          />
+        ) : (
+          <Text size="sm" c="dimmed" style={{ textAlign: 'right', minWidth: '96px', padding: '8px' }}>
+            {t('Using model default')}
+          </Text>
+        )}
       </Flex>
 
       {settings?.provider !== ModelProviderEnum.ChatboxAI && (
