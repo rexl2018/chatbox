@@ -55,7 +55,37 @@ const configuration: webpack.Configuration = {
       },
       {
         test: /\.s?(a|c)ss$/,
-        use: [MiniCssExtractPlugin.loader, 'css-loader', 'sass-loader', 'postcss-loader'],
+        use: [
+          MiniCssExtractPlugin.loader,
+          'css-loader',
+          'sass-loader',
+          {
+            loader: 'postcss-loader',
+            options: {
+              postcssOptions: {
+                config: false,
+                plugins: [
+                  'tailwindcss/nesting',
+                  'tailwindcss',
+                  'autoprefixer',
+                  'postcss-preset-mantine',
+                  [
+                    'postcss-simple-vars',
+                    {
+                      variables: {
+                        'mantine-breakpoint-xs': '36em',
+                        'mantine-breakpoint-sm': '48em',
+                        'mantine-breakpoint-md': '62em',
+                        'mantine-breakpoint-lg': '75em',
+                        'mantine-breakpoint-xl': '88em',
+                      },
+                    },
+                  ],
+                ],
+              },
+            },
+          },
+        ],
         exclude: /\.module\.s?(c|a)ss$/,
         sideEffects: true,
       },
