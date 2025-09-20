@@ -65,20 +65,7 @@ const getChatboxHeaders = async () => {
 // ========== 各个接口方法 ==========
 
 export async function checkNeedUpdate(version: string, os: string, config: Config, settings: Settings) {
-  type Response = {
-    need_update?: boolean
-  }
-  // const res = await ofetch<Response>(`${RELEASE_ORIGIN}/chatbox_need_update/${version}`, {
-  const res = await ofetch<Response>(`${getAPIOrigin()}/chatbox_need_update/${version}`, {
-    method: 'POST',
-    retry: 3,
-    body: {
-      uuid: config.uuid,
-      os: os,
-      allowReportingAndTracking: settings.allowReportingAndTracking ? 1 : 0,
-    },
-  })
-  return !!res['need_update']
+  return Promise.resolve(false)
 }
 
 // export async function getSponsorAd(): Promise<null | SponsorAd> {
@@ -309,20 +296,9 @@ export async function parseUserLinkPro(params: { licenseKey: string; url: string
 }
 
 export async function parseUserLinkFree(params: { url: string }) {
-  type Response = {
-    title: string
-    text: string
-  }
-  const afetch = await getAfetch()
-  const res = await afetch(`https://cors-proxy.chatboxai.app/api/fetch-webpage`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(params),
-  })
-  const json: Response = await res.json()
-  return json
+  // This feature has been disabled due to security concerns about the proxy.
+  console.error('parseUserLinkFree has been disabled.');
+  return Promise.resolve({ title: '', text: '' });
 }
 
 export async function webBrowsing(params: { licenseKey: string; query: string }) {
