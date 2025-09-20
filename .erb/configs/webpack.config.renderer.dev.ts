@@ -8,10 +8,10 @@ import { merge } from 'webpack-merge'
 import { execSync, spawn } from 'child_process'
 import ReactRefreshWebpackPlugin from '@pmmmwh/react-refresh-webpack-plugin'
 import { BundleAnalyzerPlugin } from 'webpack-bundle-analyzer'
-import baseConfig from './webpack.config.base'
-import webpackPaths from './webpack.paths'
-import checkNodeEnv from '../scripts/check-node-env'
-import { TanStackRouterWebpack } from '@tanstack/router-plugin/webpack'
+import baseConfig from './webpack.config.base.ts'
+import webpackPaths from './webpack.paths.ts'
+import checkNodeEnv from '../scripts/check-node-env.js';
+import { TanStackRouterWebpack } from '@tanstack/router-plugin/webpack';
 
 // When an ESLint server is running, we can't set the NODE_ENV so we'll check if it's
 // at the dev webpack config is not accidentally run in a production environment
@@ -19,13 +19,11 @@ if (process.env.NODE_ENV === 'production') {
   checkNodeEnv('development')
 }
 
-const port = process.env.PORT || 1212
-const manifest = path.resolve(webpackPaths.dllPath, 'renderer.json')
-const skipDLLs =
-  module.parent?.filename.includes('webpack.config.renderer.dev.dll') ||
-  module.parent?.filename.includes('webpack.config.eslint')
+const port = process.env.PORT || 1212;
+const manifest = path.resolve(webpackPaths.dllPath, 'renderer.json');
+const skipDLLs = process.argv.includes('webpack.config.renderer.dev.dll') || process.argv.includes('webpack.config.eslint');
 
-const DEV_WEB_ONLY = process.env.DEV_WEB_ONLY === 'true'
+const DEV_WEB_ONLY = process.env.DEV_WEB_ONLY === 'true';
 
 /**
  * Warn if the DLL is not built
@@ -35,8 +33,8 @@ if (!skipDLLs && !(fs.existsSync(webpackPaths.dllPath) && fs.existsSync(manifest
     chalk.black.bgYellow.bold(
       'The DLL files are missing. Sit back while we build them for you with "npm run build-dll"'
     )
-  )
-  execSync('npm run postinstall')
+  );
+  // Skip DLL reference when files don't exist
 }
 
 const configuration: webpack.Configuration = {
@@ -117,12 +115,12 @@ const configuration: webpack.Configuration = {
     ],
   },
   plugins: [
-    ...(skipDLLs
+    ...(skipDLLs || !fs.existsSync(manifest)
       ? []
       : [
           new webpack.DllReferencePlugin({
             context: webpackPaths.dllPath,
-            manifest: require(manifest),
+            manifest: JSON.parse(fs.readFileSync(manifest, 'utf-8')),
             sourceType: 'var',
           }),
         ]),

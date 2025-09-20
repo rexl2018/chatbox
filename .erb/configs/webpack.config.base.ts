@@ -2,13 +2,21 @@
  * Base webpack config used across other specific configs
  */
 
-import webpack from 'webpack'
-import TsconfigPathsPlugins from 'tsconfig-paths-webpack-plugin'
-import webpackPaths from './webpack.paths'
-import { dependencies as externals } from '../../release/app/package.json'
+import webpack from 'webpack';
+import TsconfigPathsPlugins from 'tsconfig-paths-webpack-plugin';
+import webpackPaths from './webpack.paths.ts';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const releaseAppPackageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '../../release/app/package.json'), 'utf-8'));
+const externals = releaseAppPackageJson.dependencies || {};
 
 const configuration: webpack.Configuration = {
-  externals: [...Object.keys(externals || {})],
+  externals: [...Object.keys(externals)],
 
   stats: 'errors-only',
 
@@ -82,6 +90,6 @@ const configuration: webpack.Configuration = {
       USE_LOCAL_API: '',
     }),
   ],
-}
+};
 
-export default configuration
+export default configuration;

@@ -2,25 +2,33 @@
  * Builds the DLL for development electron renderer process
  */
 
-import webpack from 'webpack'
-import path from 'path'
-import { merge } from 'webpack-merge'
-import baseConfig from './webpack.config.base'
-import webpackPaths from './webpack.paths'
-import { dependencies } from '../../package.json'
-import checkNodeEnv from '../scripts/check-node-env'
+import webpack from 'webpack';
+import path from 'path';
+import { merge } from 'webpack-merge';
+import baseConfig from './webpack.config.base.ts';
+import webpackPaths from './webpack.paths.ts';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+import checkNodeEnv from '../scripts/check-node-env.js';
+import rendererConfig from './webpack.config.renderer.dev.ts';
 
-checkNodeEnv('development')
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '../../package.json'), 'utf-8'));
+const dependencies = packageJson.dependencies || {};
+
+checkNodeEnv('development');
 
 const EXCLUDE_MODULES = new Set([
-    '@modelcontextprotocol/sdk', // avoid `Package path . is not exported from package` error
-    '@mastra/core',
-    '@mastra/rag',
-    '@libsql/client',
-    'capacitor-stream-http', // local file dependency
-  ])
+  '@modelcontextprotocol/sdk', // avoid `Package path . is not exported from package` error
+  '@mastra/core',
+  '@mastra/rag',
+  '@libsql/client',
+  'capacitor-stream-http', // local file dependency
+]);
 
-const dist = webpackPaths.dllPath
+const dist = webpackPaths.dllPath;
 
 const configuration: webpack.Configuration = {
   context: webpackPaths.rootPath,
@@ -36,10 +44,12 @@ const configuration: webpack.Configuration = {
   /**
    * Use `module` from `webpack.config.renderer.dev.js`
    */
-  module: require('./webpack.config.renderer.dev').default.module,
+  module: rendererConfig.module,
 
   entry: {
-    renderer: Object.keys(dependencies || {}).filter((dependency) => !EXCLUDE_MODULES.has(dependency)),
+    renderer: Object.keys(dependencies || {}).filter(
+      (dependency) => !EXCLUDE_MODULES.has(dependency)
+    ),
   },
 
   output: {
@@ -80,6 +90,6 @@ const configuration: webpack.Configuration = {
       },
     }),
   ],
-}
+};
 
-export default merge(baseConfig, configuration)
+export default merge(baseConfig, configuration);
