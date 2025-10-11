@@ -8,13 +8,22 @@ import iconv from 'iconv-lite'
 import { isEmpty } from 'lodash'
 import { v4 as uuidv4 } from 'uuid'
 import { getLogger } from '../util'
-import { shellEnv } from './shell-env'
+import * as shellEnvModule from './shell-env'
+const shellEnv: (shell?: string) => Promise<Record<string, string>> =
+  ((shellEnvModule as any)?.shellEnv || (shellEnvModule as any)?.default || (shellEnvModule as any)) as any
 
 async function enhanceEnv(configEnv?: Record<string, string>) {
-  let env = await shellEnv().catch((err) => {
+  let env: Record<string, string> = {}
+  try {
+    if (typeof shellEnv === 'function') {
+      env = (await shellEnv()) || {}
+    } else {
+      logger.warn('shell-env module unavailable or not a function, skipping shell environment augmentation')
+    }
+  } catch (err) {
     logger.error('shell-env', err)
-    return {}
-  })
+    env = {}
+  }
   if (configEnv) {
     env = { ...env, ...configEnv }
   }
