@@ -1,4 +1,4 @@
-import type { CoreMessage } from 'ai'
+import type { ModelMessage } from 'ai'
 import pMap from 'p-map'
 import type { ModelInterface } from 'src/shared/models/types'
 import { createModelDependencies } from '@/adapters'
@@ -26,14 +26,14 @@ export async function imageOCR(ocrModel: ModelInterface, messages: Message[]) {
   })
 }
 async function doOCR(model: ModelInterface, imageData: string) {
-  const msg: CoreMessage = {
+  const msg: ModelMessage = {
     role: 'user',
     content: [
       {
         type: 'text',
         text: 'OCR the following image into Markdown. Tables should be formatted as HTML. Do not sorround your output with triple backticks.',
       },
-      { type: 'image', image: imageData, mimeType: 'image/png' },
+      { type: 'image' as const, image: imageData },
     ],
   }
   const chatResult = await model.chat([msg], {})

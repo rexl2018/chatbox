@@ -1,11 +1,11 @@
-import { useState } from 'react'
-import { Chip } from '@mui/material'
-import { SponsorAd } from '../../shared/types'
 import CampaignOutlinedIcon from '@mui/icons-material/CampaignOutlined'
 import CancelOutlinedIcon from '@mui/icons-material/CancelOutlined'
-import platform from '../platform'
+import { Chip } from '@mui/material'
 import { useAtomValue } from 'jotai'
+import { useState } from 'react'
 import { currentSessionIdAtom } from '@/stores/atoms'
+import type { SponsorAd } from '../../shared/types'
+import platform from '../platform'
 
 export default function SponsorChip(props: {}) {
   const currrentSessionId = useAtomValue(currentSessionIdAtom)

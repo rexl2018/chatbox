@@ -1,8 +1,12 @@
-import * as remote from '../packages/remote'
-import { CopilotDetail } from '../../shared/types'
-import { useAtom, useAtomValue } from 'jotai'
-import { languageAtom, myCopilotsAtom } from '../stores/atoms'
 import { useQuery } from '@tanstack/react-query'
+import { useAtom } from 'jotai'
+import { atomWithStorage } from 'jotai/utils'
+import type { CopilotDetail } from 'src/shared/types'
+import * as remote from '@/packages/remote'
+import storage, { StorageKey } from '@/storage'
+import { useLanguage } from '@/stores/settingsStore'
+
+const myCopilotsAtom = atomWithStorage<CopilotDetail[]>(StorageKey.MyCopilots, [], storage)
 
 export function useMyCopilots() {
   const [copilots, setCopilots] = useAtom(myCopilotsAtom)
@@ -36,7 +40,7 @@ export function useMyCopilots() {
 }
 
 export function useRemoteCopilots() {
-  const language = useAtomValue(languageAtom)
+  const language = useLanguage()
   const { data: copilots, ...others } = useQuery({
     queryKey: ['remote-copilots', language],
     queryFn: () => remote.listCopilots(language),

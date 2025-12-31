@@ -1,11 +1,11 @@
 import { Snackbar } from '@mui/material'
-import { useAtomValue } from 'jotai'
 import {} from 'react'
-import * as atoms from '../stores/atoms'
+import { useStore } from 'zustand'
+import { uiStore } from '@/stores/uiStore'
 import * as toastActions from '../stores/toastActions'
 
 function Toasts() {
-  const toasts = useAtomValue(atoms.toastsAtom)
+  const toasts = useStore(uiStore, (state) => state.toasts)
   return (
     <>
       {toasts.map((toast) => (

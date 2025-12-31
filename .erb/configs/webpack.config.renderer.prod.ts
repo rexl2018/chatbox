@@ -1,24 +1,42 @@
 /**
  * Build config for electron renderer process
  */
+
+import { sentryWebpackPlugin } from '@sentry/webpack-plugin'
 import { TanStackRouterWebpack } from '@tanstack/router-plugin/webpack'
 import CssMinimizerPlugin from 'css-minimizer-webpack-plugin'
+import fs from 'fs'
 import HtmlWebpackPlugin from 'html-webpack-plugin'
 import MiniCssExtractPlugin from 'mini-css-extract-plugin'
 import path from 'path'
 import TerserPlugin from 'terser-webpack-plugin'
+import { fileURLToPath } from 'url'
 import webpack from 'webpack'
 import { BundleAnalyzerPlugin } from 'webpack-bundle-analyzer'
 import { merge } from 'webpack-merge'
-import JavaScriptObfuscator from 'webpack-obfuscator'
 import checkNodeEnv from '../scripts/check-node-env.js'
 import baseConfig from './webpack.config.base.ts'
 import webpackPaths from './webpack.paths.ts'
 
 checkNodeEnv('production')
 
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const releaseAppPackageJson = JSON.parse(
+  fs.readFileSync(path.join(__dirname, '../../release/app/package.json'), 'utf-8')
+)
+
+const inferredRelease = process.env.SENTRY_RELEASE || releaseAppPackageJson.version
+const inferredDist = process.env.SENTRY_DIST || undefined
+
+// Ensure downstream tooling sees consistent release/dist values
+process.env.SENTRY_RELEASE = inferredRelease
+if (inferredDist) {
+  process.env.SENTRY_DIST = inferredDist
+}
+
 const configuration: webpack.Configuration = {
-  devtool: false,
+  devtool: 'source-map',
 
   mode: 'production',
 
@@ -58,7 +76,13 @@ const configuration: webpack.Configuration = {
         use: [
           MiniCssExtractPlugin.loader,
           'css-loader',
-          'sass-loader',
+          {
+            loader: 'string-replace-loader',
+            options: {
+              search: /(\d+)dvh/g,
+              replace: '$1vh',
+            },
+          },
           {
             loader: 'postcss-loader',
             options: {
@@ -85,6 +109,7 @@ const configuration: webpack.Configuration = {
               },
             },
           },
+          'sass-loader',
         ],
         exclude: /\.module\.s?(c|a)ss$/,
         sideEffects: true,
@@ -181,7 +206,38 @@ const configuration: webpack.Configuration = {
 
     new webpack.DefinePlugin({
       'process.type': '"renderer"',
-    }),   
+    }),
+    // 禁用混淆，加快构建速度
+    // new JavaScriptObfuscator({
+    //   optionsPreset: 'default',
+    //   // 太卡了
+    //   // controlFlowFlattening: true,
+    //   // controlFlowFlatteningThreshold: 0.1,
+    //
+    //   // 默认的变量名混淆，可能被误报为恶意代码
+    //   identifierNamesGenerator: 'mangled-shuffled',
+    //   // 这些静态字符串混淆后，很可能被误报为恶意代码
+    //   exclude: ['initial_data.ts', 'initial_data.js'],
+    //
+    //   numbersToExpressions: true,
+    //   // 保护前端代码不被偷到其他地方部署
+    //   // 迁移过程中，暂时关闭保护
+    //   // domainLock: ['localhost', ".chatboxai.app", ".chatboxai.com", ".chatboxapp.xyz", "chatbox-pro.pages.dev"],
+    //   // domainLockRedirectUrl: 'https://chatboxai.app',
+    //   sourceMap: true,
+    // }),
+
+    process.env.SENTRY_AUTH_TOKEN &&
+      sentryWebpackPlugin({
+        authToken: process.env.SENTRY_AUTH_TOKEN,
+        org: 'sentry',
+        project: 'chatbox',
+        url: 'https://sentry.midway.run/',
+        release: {
+          name: inferredRelease,
+          ...(inferredDist ? { dist: inferredDist } : {}),
+        },
+      }),
   ],
 }
 

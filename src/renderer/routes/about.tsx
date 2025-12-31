@@ -11,19 +11,19 @@ import {
   IconPencil,
 } from '@tabler/icons-react'
 import { createFileRoute } from '@tanstack/react-router'
-import { useAtomValue } from 'jotai'
 import { Fragment, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import BrandGithub from '@/components/icons/BrandGithub'
 import BrandRedNote from '@/components/icons/BrandRedNote'
 import BrandWechat from '@/components/icons/BrandWechat'
 import Page from '@/components/Page'
+import { ScalableIcon } from '@/components/ScalableIcon'
 import { useIsSmallScreen } from '@/hooks/useScreenChange'
 import useVersion from '@/hooks/useVersion'
 import platform from '@/platform'
 import iconPNG from '@/static/icon.png'
 import IMG_WECHAT_QRCODE from '@/static/wechat_qrcode.png'
-import { languageAtom } from '@/stores/atoms'
+import { useLanguage } from '@/stores/settingsStore'
 
 export const Route = createFileRoute('/about')({
   component: RouteComponent,
@@ -32,14 +32,14 @@ export const Route = createFileRoute('/about')({
 function RouteComponent() {
   const { t, i18n: _i18n } = useTranslation()
   const version = useVersion()
-  const language = useAtomValue(languageAtom)
+  const language = useLanguage()
   const isSmallScreen = useIsSmallScreen()
 
   return (
     <Page title={t('About')}>
       <Container size="md" p={0}>
         <Stack gap="xxl" px={isSmallScreen ? 'sm' : 'md'} py={isSmallScreen ? 'xl' : 'md'}>
-          <Flex gap="xxl" p="md" className="rounded-lg bg-[var(--mantine-color-chatbox-background-secondary-text)]">
+          <Flex gap="xxl" p="md" className="rounded-lg bg-chatbox-background-secondary">
             <Image h={100} w={100} mah={'20vw'} maw={'20vw'} src={iconPNG} />
             <Stack flex={1} gap="xxs">
               <Flex justify="space-between" align="center">
@@ -83,9 +83,9 @@ function RouteComponent() {
           </Flex>
 
           {_i18n.language === 'zh-Hans' ? (
-            <Stack gap="xs" p="md" bg="var(--mantine-color-chatbox-warning-light)" className="rounded-lg">
+            <Stack gap="xs" p="md" className="rounded-lg bg-chatbox-background-warning-secondary">
               <Flex align="center" gap="xxs" c="chatbox-error">
-                <IconAlertTriangle size={24} className="!text-inherit" />
+                <ScalableIcon icon={IconAlertTriangle} size={24} className="!text-inherit" />
                 <Title order={5}>正版提示</Title>
               </Flex>
               <Text>
@@ -183,7 +183,7 @@ function WechatQRCode() {
 
 function List(props: { children: ReactElement[] }) {
   return (
-    <Stack gap={0} className="rounded-lg bg-[var(--mantine-color-chatbox-background-secondary-text)]">
+    <Stack gap={0} className="rounded-lg bg-chatbox-background-secondary">
       {props.children.map((child, index) => (
         <Fragment key={`child-${index}`}>
           {child}
@@ -233,7 +233,7 @@ function ListItem({
               {value}
             </Text>
           )}
-          {link && <IconChevronRight size={20} className="!text-inherit" />}
+          {link && <ScalableIcon icon={IconChevronRight} size={20} className="!text-inherit" />}
         </>
       )}
     </Flex>

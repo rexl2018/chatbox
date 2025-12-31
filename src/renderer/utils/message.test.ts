@@ -1,5 +1,6 @@
-import { Message } from 'src/shared/types'
-import { sequenceMessages } from './message'
+import type { Message } from 'src/shared/types'
+import { describe, expect, test } from 'vitest'
+import { sequenceMessages } from '../../shared/utils/message'
 
 describe('SequenceMessages', () => {
   // Each test case
@@ -20,9 +21,23 @@ describe('SequenceMessages', () => {
         { id: '', role: 'system', contentParts: [{ type: 'text', text: 'S2' }] },
       ],
       expected: [
-        { id: '', role: 'system', contentParts: [{ type: 'text', text: 'S1\n\nS2' }] },
+        {
+          id: '',
+          role: 'system',
+          contentParts: [
+            { type: 'text', text: 'S1' },
+            { type: 'text', text: 'S2' },
+          ],
+        },
         { id: '', role: 'user', contentParts: [{ type: 'text', text: 'U1' }] },
-        { id: '', role: 'assistant', contentParts: [{ type: 'text', text: 'A1\n\nA2' }] },
+        {
+          id: '',
+          role: 'assistant',
+          contentParts: [
+            { type: 'text', text: 'A1' },
+            { type: 'text', text: 'A2' },
+          ],
+        },
         { id: '', role: 'user', contentParts: [{ type: 'text', text: 'U2' }] },
         { id: '', role: 'assistant', contentParts: [{ type: 'text', text: 'A3' }] },
       ],
@@ -125,7 +140,16 @@ L3
         { id: '', role: 'user', contentParts: [{ type: 'text', text: 'U1' }] },
         { id: '', role: 'user', contentParts: [{ type: 'text', text: 'U2' }] },
       ],
-      expected: [{ id: '', role: 'user', contentParts: [{ type: 'text', text: 'U1\n\nU2' }] }],
+      expected: [
+        {
+          id: '',
+          role: 'user',
+          contentParts: [
+            { type: 'text', text: 'U1' },
+            { type: 'text', text: 'U2' },
+          ],
+        },
+      ],
     },
     {
       name: '只有 assistant 消息',
@@ -167,7 +191,16 @@ L3
         { id: '', role: 'user', contentParts: [{ type: 'text', text: '' }] },
         { id: '', role: 'assistant', contentParts: [{ type: 'text', text: '' }] },
       ],
-      expected: [{ id: '', role: 'user', contentParts: [{ type: 'text', text: 'S1' }] }],
+      expected: [
+        {
+          id: '',
+          role: 'user',
+          contentParts: [
+            { type: 'text', text: '' },
+            { type: 'text', text: 'S1' },
+          ],
+        },
+      ],
     },
     {
       name: '合并图片',
@@ -196,9 +229,12 @@ L3
           id: '',
           role: 'user',
           contentParts: [
-            { type: 'text', text: 'U1\n\nU2\n\nU3\n\nU4' },
+            { type: 'text', text: 'U1' },
+            { type: 'text', text: 'U2' },
             { type: 'image', storageKey: 'url1' },
+            { type: 'text', text: 'U3' },
             { type: 'image', storageKey: 'url2' },
+            { type: 'text', text: 'U4' },
           ],
         },
       ],

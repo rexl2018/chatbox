@@ -1,7 +1,7 @@
+import fs from 'node:fs'
+import { setTimeout } from 'node:timers/promises'
 import { MDocument } from '@mastra/rag'
-import { type CoreMessage, embedMany } from 'ai'
-import fs from 'fs'
-import { setTimeout } from 'timers/promises'
+import { embedMany, type ModelMessage } from 'ai'
 import { isEpubFilePath, isOfficeFilePath, isTextFilePath } from '../../shared/file-extensions'
 import { rerank } from '../../shared/models/rerank'
 import { sentry } from '../adapters/sentry'
@@ -34,14 +34,14 @@ async function parseFileToDocument(
     const dataUrl = `data:${fileMeta.mimeType};base64,${imageBase64}`
 
     // Assemble chat message (with image)
-    const msg: CoreMessage = {
+    const msg: ModelMessage = {
       role: 'user',
       content: [
         {
           type: 'text',
-          text: 'OCR the following image into Markdown. Tables should be formatted as HTML. Do not sorround your output with triple backticks.',
+          text: 'OCR the following image into Markdown. Do not sorround your output with triple backticks.',
         },
-        { type: 'image', image: dataUrl, mimeType: fileMeta.mimeType },
+        { type: 'image', image: dataUrl, mediaType: fileMeta.mimeType },
       ],
     }
 

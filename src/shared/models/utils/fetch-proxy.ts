@@ -32,32 +32,3 @@ export function createFetchWithProxy(useProxy: boolean | undefined, dependencies
     }
   }
 }
-
-interface ListModelsResponse {
-  object: 'list'
-  data: {
-    id: string
-    object: 'model'
-    created: number
-    owned_by: string
-  }[]
-}
-
-export async function fetchRemoteModels(
-  params: { apiHost: string; apiKey: string; useProxy?: boolean },
-  dependencies: ModelDependencies
-) {
-  const response = await dependencies.request.apiRequest({
-    url: `${params.apiHost}/models`,
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${params.apiKey}`,
-    },
-    useProxy: params.useProxy,
-  })
-  const json: ListModelsResponse = await response.json()
-  if (!json.data) {
-    throw new ApiError(JSON.stringify(json))
-  }
-  return json.data.map((item) => item.id)
-}

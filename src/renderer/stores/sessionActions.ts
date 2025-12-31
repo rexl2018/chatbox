@@ -1,29 +1,63 @@
+import { arrayMove } from '@dnd-kit/sortable'
 import * as Sentry from '@sentry/react'
 import { getDefaultStore } from 'jotai'
-import { identity, pickBy, throttle } from 'lodash'
+import { identity, omit, pickBy } from 'lodash'
+import * as defaults from 'src/shared/defaults'
 import { getModel } from 'src/shared/models'
-import type { onResultChangeWithCancel } from 'src/shared/models/types'
+import type { OnResultChangeWithCancel } from 'src/shared/models/types'
 import { v4 as uuidv4 } from 'uuid'
 import { createModelDependencies } from '@/adapters'
 import * as dom from '@/hooks/dom'
 import { languageNameMap } from '@/i18n/locales'
-import { formatChatAsHtml, formatChatAsMarkdown, formatChatAsTxt } from '@/lib/format-chat'
 import * as appleAppStore from '@/packages/apple_app_store'
-import * as localParser from '@/packages/local-parser'
 import { generateImage, generateText, streamText } from '@/packages/model-calls'
 import { getModelDisplayName } from '@/packages/model-setting-utils'
-import * as remote from '@/packages/remote'
 import { estimateTokensFromMessages } from '@/packages/token'
 import { router } from '@/router'
 import { StorageKeyGenerator } from '@/storage/StoreStorage'
+import { sortSessions } from '@/utils/session-utils'
 import { trackEvent } from '@/utils/track'
-import * as defaults from '../../shared/defaults'
+import {
+  AIProviderNoImplementedPaintError,
+  ApiError,
+  BaseError,
+  ChatboxAIAPIError,
+  NetworkError,
+} from '../../shared/models/errors'
+import {
+  copyMessage,
+  copyThreads,
+  createMessage,
+  type ExportChatFormat,
+  type ExportChatScope,
+  type Message,
+  type MessageImagePart,
+  type MessagePicture,
+  type ModelProvider,
+  type Session,
+  type SessionMeta,
+  type SessionSettings,
+  type SessionThread,
+  type SessionType,
+  type Settings,
+} from '../../shared/types'
+import { cloneMessage, countMessageWords, getMessageText, mergeMessages } from '../../shared/utils/message'
+import * as promptFormat from '../packages/prompts'
+import platform from '../platform'
+import storage from '../storage'
+import * as atoms from './atoms'
+import * as chatStore from './chatStore'
+import * as scrollActions from './scrollActions'
+import { exportChat, initEmptyChatSession, initEmptyPictureSession } from './sessionHelpers'
+import * as settingActions from './settingActions'
+import { settingsStore } from './settingsStore'
+import { uiStore } from './uiStore'
 
 /**
  * 跟踪生成事件
  */
 function trackGenerateEvent(
-  settings: Settings,
+  settings: SessionSettings,
   globalSettings: Settings,
   sessionType: SessionType | undefined,
   options?: { operationType?: 'send_message' | 'regenerate' }
@@ -45,8 +79,7 @@ function trackGenerateEvent(
     }
   }
 
-  const store = getDefaultStore()
-  const webBrowsing = store.get(atoms.inputBoxWebBrowsingModeAtom)
+  const webBrowsing = uiStore.getState().inputBoxWebBrowsingMode
 
   trackEvent('generate', {
     provider: providerIdentifier,
@@ -57,47 +90,12 @@ function trackGenerateEvent(
   })
 }
 
-import {
-  AIProviderNoImplementedPaintError,
-  ApiError,
-  BaseError,
-  ChatboxAIAPIError,
-  NetworkError,
-} from '../../shared/models/errors'
-import {
-  createMessage,
-  type ExportChatFormat,
-  type ExportChatScope,
-  type Message,
-  type MessageFile,
-  type MessageImagePart,
-  type MessageLink,
-  type MessagePicture,
-  type ModelProvider,
-  ModelProviderEnum,
-  type Session,
-  type SessionMeta,
-  type SessionSettings,
-  type SessionThread,
-  type SessionType,
-  type Settings,
-} from '../../shared/types'
-import i18n from '../i18n'
-import * as promptFormat from '../packages/prompts'
-import platform from '../platform'
-import storage from '../storage'
-import { cloneMessage, countMessageWords, getMessageText, mergeMessages } from '../utils/message'
-import * as atoms from './atoms'
-import * as scrollActions from './scrollActions'
-import { clearConversations, copySession, createSession, getSession, saveSession } from './sessionStorageMutations'
-import * as settingActions from './settingActions'
-
 /**
  * 创建一个新的会话
  * @param newSession
  */
 async function create(newSession: Omit<Session, 'id'>) {
-  const session = await createSession(newSession)
+  const session = await chatStore.createSession(newSession)
   switchCurrentSession(session.id)
   return session
 }
@@ -105,15 +103,15 @@ async function create(newSession: Omit<Session, 'id'>) {
 /**
  * 修改会话名称
  */
-export function modifyNameAndThreadName(sessionId: string, name: string) {
-  saveSession({ id: sessionId, name, threadName: name })
+export async function modifyNameAndThreadName(sessionId: string, name: string) {
+  await chatStore.updateSession(sessionId, { name, threadName: name })
 }
 
 /**
  * 修改会话的当前话题名称
  */
-export function modifyThreadName(sessionId: string, threadName: string) {
-  saveSession({ id: sessionId, threadName })
+export async function modifyThreadName(sessionId: string, threadName: string) {
+  await chatStore.updateSession(sessionId, { threadName })
 }
 
 /**
@@ -162,14 +160,29 @@ export function switchCurrentSession(sessionId: string) {
   scrollActions.clearAutoScroll() // 切换会话时清除自动滚动
 }
 
+export async function reorderSessions(oldIndex: number, newIndex: number) {
+  console.debug('sessionActions', 'reorderSessions', oldIndex, newIndex)
+  await chatStore.updateSessionList((sessions) => {
+    if (!sessions) {
+      throw new Error('Session list not found')
+    }
+    /**
+     * 1. transform to session showing order
+     * 2. adjust item order
+     * 3. transform to storage order to save
+     *  */
+    const sortedSessions = sortSessions(sessions)
+    return sortSessions(arrayMove(sortedSessions, oldIndex, newIndex))
+  })
+}
+
 /**
  * 切换当前会话，根据排序后的索引
  * @param index
  * @returns
  */
-export function switchToIndex(index: number) {
-  const store = getDefaultStore()
-  const sessions = store.get(atoms.sortedSessionsListAtom)
+export async function switchToIndex(index: number) {
+  const sessions = await chatStore.listSessionsMeta()
   const target = sessions[index]
   if (!target) {
     return
@@ -182,9 +195,12 @@ export function switchToIndex(index: number) {
  * @param reversed 是否反向切换到上一个
  * @returns
  */
-export function switchToNext(reversed?: boolean) {
+export async function switchToNext(reversed?: boolean) {
+  const sessions = await chatStore.listSessionsMeta()
+  if (!sessions) {
+    return
+  }
   const store = getDefaultStore()
-  const sessions = store.get(atoms.sortedSessionsListAtom)
   const currentSessionId = store.get(atoms.currentSessionIdAtom)
   const currentIndex = sessions.findIndex((s) => s.id === currentSessionId)
   if (currentIndex < 0) {
@@ -209,13 +225,13 @@ export function switchToNext(reversed?: boolean) {
  * @param newThread  Pick<Partial<SessionThread>, 'name'>
  * @returns
  */
-export function editThread(sessionId: string, threadId: string, newThread: Pick<Partial<SessionThread>, 'name'>) {
-  const session = getSession(sessionId)
+export async function editThread(sessionId: string, threadId: string, newThread: Pick<Partial<SessionThread>, 'name'>) {
+  const session = await chatStore.getSession(sessionId)
   if (!session || !session.threads) return
 
   // 特殊情况： 如果修改的是当前的话题，则直接修改当前会话的threadName, 而不是name
   if (threadId === sessionId) {
-    saveSession({ ...session, threadName: newThread.name })
+    await chatStore.updateSession(sessionId, { threadName: newThread.name })
     return
   }
 
@@ -227,7 +243,7 @@ export function editThread(sessionId: string, threadId: string, newThread: Pick<
     return { ...t, ...newThread }
   })
 
-  saveSession({ ...session, threads })
+  await chatStore.updateSession(sessionId, { threads })
 }
 
 /**
@@ -235,17 +251,16 @@ export function editThread(sessionId: string, threadId: string, newThread: Pick<
  * @param sessionId 会话 id
  * @param threadId 历史话题 id
  */
-export function removeThread(sessionId: string, threadId: string) {
-  if (sessionId === threadId) {
-    removeCurrentThread(sessionId)
-    return
-  }
-  const session = getSession(sessionId)
+export async function removeThread(sessionId: string, threadId: string) {
+  const session = await chatStore.getSession(sessionId)
   if (!session) {
     return
   }
-  saveSession({
-    id: sessionId,
+  if (sessionId === threadId) {
+    await removeCurrentThread(sessionId)
+    return
+  }
+  return await chatStore.updateSession(sessionId, {
     threads: session.threads?.filter((t) => t.id !== threadId),
   })
 }
@@ -255,26 +270,48 @@ export function removeThread(sessionId: string, threadId: string) {
  * @param sessionId
  * @returns
  */
-export function clear(sessionId: string) {
-  const session = getSession(sessionId)
+export async function clear(sessionId: string) {
+  const session = await chatStore.getSession(sessionId)
   if (!session) {
     return
   }
   session.messages.forEach((msg) => {
     msg?.cancel?.()
   })
-  saveSession({
-    id: sessionId,
+  return await chatStore.updateSessionWithMessages(session.id, {
     messages: session.messages.filter((m) => m.role === 'system').slice(0, 1),
     threads: undefined,
   })
+}
+
+async function copySession(
+  sourceMeta: SessionMeta & {
+    name?: Session['name']
+    messages?: Session['messages']
+    threads?: Session['threads']
+    threadName?: Session['threadName']
+  }
+) {
+  const source = await chatStore.getSession(sourceMeta.id)
+  if (!source) {
+    throw new Error(`Session ${sourceMeta.id} not found`)
+  }
+  const newSession = {
+    ...omit(source, 'id', 'messages', 'threads', 'messageForksHash'),
+    ...(sourceMeta.name ? { name: sourceMeta.name } : {}),
+    messages: sourceMeta.messages ? sourceMeta.messages.map(copyMessage) : source.messages.map(copyMessage),
+    threads: sourceMeta.threads ? copyThreads(sourceMeta.threads) : source.threads,
+    messageForksHash: undefined, // 不复制分叉数据
+    ...(sourceMeta.threadName ? { threadName: sourceMeta.threadName } : {}),
+  }
+  return await chatStore.createSession(newSession, source.id)
 }
 
 /**
  * 复制会话
  * @param source
  */
-export async function copy(source: SessionMeta) {
+export async function copyAndSwitchSession(source: SessionMeta) {
   const newSession = await copySession(source)
   switchCurrentSession(newSession.id)
 }
@@ -283,8 +320,8 @@ export async function copy(source: SessionMeta) {
  * 将会话中的当前消息移动到历史记录中，并清空上下文
  * @param sessionId
  */
-export function refreshContextAndCreateNewThread(sessionId: string) {
-  const session = getSession(sessionId)
+export async function refreshContextAndCreateNewThread(sessionId: string) {
+  const session = await chatStore.getSession(sessionId)
   if (!session) {
     return
   }
@@ -302,19 +339,75 @@ export function refreshContextAndCreateNewThread(sessionId: string) {
   if (systemPrompt) {
     systemPrompt = createMessage('system', getMessageText(systemPrompt))
   }
-  saveSession({
+  await chatStore.updateSessionWithMessages(session.id, {
     ...session,
     threads: session.threads ? [...session.threads, newThread] : [newThread],
     messages: systemPrompt ? [systemPrompt] : [createMessage('system', defaults.getDefaultPrompt())],
     threadName: '',
-    messageForksHash: undefined,
   })
 }
 
-export function startNewThread() {
-  const store = getDefaultStore()
-  const sessionId = store.get(atoms.currentSessionIdAtom)
-  refreshContextAndCreateNewThread(sessionId)
+export async function startNewThread(sessionId: string) {
+  await refreshContextAndCreateNewThread(sessionId)
+  // 自动滚动到底部并自动聚焦到输入框
+  setTimeout(() => {
+    scrollActions.scrollToBottom()
+    dom.focusMessageInput()
+  }, 100)
+}
+
+/**
+ * 压缩当前会话并创建新话题，保留压缩后的上下文
+ * @param sessionId 会话ID
+ * @param summary 压缩后的总结内容
+ */
+export async function compressAndCreateThread(sessionId: string, summary: string) {
+  const session = await chatStore.getSession(sessionId)
+  if (!session) {
+    return
+  }
+
+  // 取消所有正在进行的消息生成
+  for (const m of session.messages) {
+    m?.cancel?.()
+  }
+
+  // 创建包含所有消息的新话题
+  const newThread: SessionThread = {
+    id: uuidv4(),
+    name: session.threadName || session.name,
+    messages: session.messages,
+    createdAt: Date.now(),
+  }
+
+  // 获取原始的系统提示（如果存在）
+  const systemPrompt = session.messages.find((m) => m.role === 'system')
+  let systemPromptText = ''
+  if (systemPrompt) {
+    systemPromptText = getMessageText(systemPrompt)
+  }
+
+  // 创建新的消息列表，包含原始系统提示和压缩后的上下文
+  const newMessages: Message[] = []
+
+  // 如果有系统提示，先添加系统提示
+  if (systemPromptText) {
+    newMessages.push(createMessage('system', systemPromptText))
+  }
+
+  // 添加压缩后的上下文作为系统消息
+  const compressionContext = `Previous conversation summary:\n\n${summary}`
+  newMessages.push(createMessage('user', compressionContext))
+
+  // 保存会话
+  await chatStore.updateSessionWithMessages(session.id, {
+    ...session,
+    threads: session.threads ? [...session.threads, newThread] : [newThread],
+    messages: newMessages,
+    threadName: '',
+    messageForksHash: undefined,
+  })
+
   // 自动滚动到底部并自动聚焦到输入框
   setTimeout(() => {
     scrollActions.scrollToBottom()
@@ -327,8 +420,8 @@ export function startNewThread() {
  * @param sessionId
  * @param threadId
  */
-export function switchThread(sessionId: string, threadId: string) {
-  const session = getSession(sessionId)
+export async function switchThread(sessionId: string, threadId: string) {
+  const session = await chatStore.getSession(sessionId)
   if (!session || !session.threads) {
     return
   }
@@ -346,7 +439,7 @@ export function switchThread(sessionId: string, threadId: string) {
     messages: session.messages,
     createdAt: Date.now(),
   })
-  saveSession({
+  await chatStore.updateSessionWithMessages(session.id, {
     ...session,
     threads: newThreads,
     messages: target.messages,
@@ -357,10 +450,9 @@ export function switchThread(sessionId: string, threadId: string) {
 
 /**
  * 删除某个会话的当前话题。如果该会话存在历史话题，则会回退到上一个话题；如果该会话没有历史话题，则会清空当前会话
- * @param sessionId
  */
-export function removeCurrentThread(sessionId: string) {
-  const session = getSession(sessionId)
+export async function removeCurrentThread(sessionId: string) {
+  const session = await chatStore.getSession(sessionId)
   if (!session) {
     return
   }
@@ -375,16 +467,16 @@ export function removeCurrentThread(sessionId: string) {
     updatedSession.threads = session.threads.slice(0, session.threads.length - 1)
     updatedSession.threadName = lastThread.name
   }
-  saveSession(updatedSession)
+  await chatStore.updateSession(session.id, updatedSession)
 }
 
 export async function moveThreadToConversations(sessionId: string, threadId: string) {
-  if (sessionId === threadId) {
-    moveCurrentThreadToConversations(sessionId)
+  const session = await chatStore.getSession(sessionId)
+  if (!session) {
     return
   }
-  const session = getSession(sessionId)
-  if (!session) {
+  if (session.id === threadId) {
+    await moveCurrentThreadToConversations(sessionId)
     return
   }
   const targetThread = session.threads?.find((t) => t.id === threadId)
@@ -398,12 +490,12 @@ export async function moveThreadToConversations(sessionId: string, threadId: str
     threads: [],
     threadName: undefined,
   })
-  removeThread(sessionId, threadId)
+  await removeThread(sessionId, threadId)
   switchCurrentSession(newSession.id)
 }
 
 export async function moveCurrentThreadToConversations(sessionId: string) {
-  const session = getSession(sessionId)
+  const session = await chatStore.getSession(sessionId)
   if (!session) {
     return
   }
@@ -414,7 +506,7 @@ export async function moveCurrentThreadToConversations(sessionId: string) {
     threads: [],
     threadName: undefined,
   })
-  removeCurrentThread(sessionId)
+  await removeCurrentThread(sessionId)
   switchCurrentSession(newSession.id)
 }
 
@@ -423,17 +515,14 @@ export async function moveCurrentThreadToConversations(sessionId: string) {
  * @param sessionId
  * @param msg
  */
-export function insertMessage(sessionId: string, msg: Message) {
-  const session = getSession(sessionId)
+export async function insertMessage(sessionId: string, msg: Message) {
+  const session = await chatStore.getSession(sessionId)
   if (!session) {
     return
   }
   msg.wordCount = countMessageWords(msg)
   msg.tokenCount = estimateTokensFromMessages([msg])
-  saveSession({
-    ...session,
-    messages: [...session.messages, msg],
-  })
+  return await chatStore.insertMessage(session.id, msg)
 }
 
 /**
@@ -442,32 +531,15 @@ export function insertMessage(sessionId: string, msg: Message) {
  * @param msg
  * @param afterMsgId
  */
-export function insertMessageAfter(sessionId: string, msg: Message, afterMsgId: string) {
-  const session = getSession(sessionId)
+export async function insertMessageAfter(sessionId: string, msg: Message, afterMsgId: string) {
+  const session = await chatStore.getSession(sessionId)
   if (!session) {
     return
   }
   msg.wordCount = countMessageWords(msg)
   msg.tokenCount = estimateTokensFromMessages([msg])
-  let hasHandled = false
-  const handle = (msgs: Message[]) => {
-    const index = msgs.findIndex((m) => m.id === afterMsgId)
-    if (index < 0) {
-      return msgs
-    }
-    hasHandled = true
-    return [...msgs.slice(0, index + 1), msg, ...msgs.slice(index + 1)]
-  }
 
-  const updatedSession = { ...session }
-  updatedSession.messages = handle(session.messages)
-  if (session.threads && !hasHandled) {
-    updatedSession.threads = session.threads.map((h) => ({
-      ...h,
-      messages: handle(h.messages),
-    }))
-  }
-  saveSession(updatedSession)
+  await chatStore.insertMessage(sessionId, msg, afterMsgId)
 }
 
 /**
@@ -476,39 +548,29 @@ export function insertMessageAfter(sessionId: string, msg: Message, afterMsgId: 
  * @param updated
  * @param refreshCounting
  */
-export function modifyMessage(sessionId: string, updated: Message, refreshCounting?: boolean) {
-  const session = getSession(sessionId)
+export async function modifyMessage(
+  sessionId: string,
+  updated: Message,
+  refreshCounting?: boolean,
+  updateOnlyCache?: boolean
+) {
+  const session = await chatStore.getSession(sessionId)
   if (!session) {
     return
   }
   if (refreshCounting) {
     updated.wordCount = countMessageWords(updated)
     updated.tokenCount = estimateTokensFromMessages([updated])
+    updated.tokenCountMap = undefined
   }
 
   // 更新消息时间戳
   updated.timestamp = Date.now()
-
-  let hasHandled = false
-  const handle = (msgs: Message[]): Message[] => {
-    return msgs.map((m) => {
-      if (m.id === updated.id) {
-        hasHandled = true
-        return { ...updated }
-      }
-      return m
-    })
+  if (updateOnlyCache) {
+    await chatStore.updateMessageCache(sessionId, updated.id, updated)
+  } else {
+    await chatStore.updateMessage(sessionId, updated.id, updated)
   }
-
-  const updatedSession = { ...session }
-  updatedSession.messages = handle(session.messages)
-  if (session.threads && !hasHandled) {
-    updatedSession.threads = session.threads.map((h) => ({
-      ...h,
-      messages: handle(h.messages),
-    }))
-  }
-  saveSession(updatedSession)
 }
 
 /**
@@ -516,108 +578,62 @@ export function modifyMessage(sessionId: string, updated: Message, refreshCounti
  * @param sessionId
  * @param messageId
  */
-export function removeMessage(sessionId: string, messageId: string) {
-  const session = getSession(sessionId)
-  if (!session) {
-    return
-  }
-
-  const updatedSession = { ...session }
-  updatedSession.messages = session.messages.filter((m) => m.id !== messageId)
-
-  if (session.threads) {
-    updatedSession.threads = session.threads
-      .map((h) => ({
-        ...h,
-        messages: h.messages.filter((m) => m.id !== messageId),
-      }))
-      .filter((h) => h.messages.length > 0)
-  }
-
-  // 删除消息的同时，也触发对消息分支的清理
-  if (session.messageForksHash) {
-    updatedSession.messageForksHash = { ...session.messageForksHash }
-    delete updatedSession.messageForksHash[messageId]
-  }
-
-  // 如果某个对话的消息为空，尽量使用上一个话题的消息
-  if (updatedSession.messages.length === 0 && updatedSession.threads && updatedSession.threads.length > 0) {
-    const lastThread = updatedSession.threads[updatedSession.threads.length - 1]
-    updatedSession.messages = lastThread.messages
-    updatedSession.threads = updatedSession.threads.slice(0, updatedSession.threads.length - 1)
-  }
-
-  saveSession(updatedSession)
+export async function removeMessage(sessionId: string, messageId: string) {
+  await chatStore.removeMessage(sessionId, messageId)
 }
-
 /**
  * 在会话中发送新用户消息，并根据需要生成回复
  * @param params
  */
-export async function submitNewUserMessage(params: {
-  currentSessionId: string
-  newUserMsg: Message
-  needGenerating: boolean
-  attachments: File[]
-  links: { url: string }[]
-}) {
-  const { currentSessionId, newUserMsg, needGenerating, attachments, links } = params
-  const store = getDefaultStore()
-  const webBrowsing = store.get(atoms.inputBoxWebBrowsingModeAtom)
+export async function submitNewUserMessage(
+  sessionId: string,
+  params: { newUserMsg: Message; needGenerating: boolean }
+) {
+  const session = await chatStore.getSession(sessionId)
+  const settings = await chatStore.getSessionSettings(sessionId)
+  if (!session || !settings) {
+    return
+  }
+  const { newUserMsg, needGenerating } = params
+  const webBrowsing = uiStore.getState().inputBoxWebBrowsingMode
 
-  // 如果存在附件，现在发送消息中构建空白的文件信息，用于占位，等待上传完成后再修改
-  if (attachments && attachments.length > 0) {
-    newUserMsg.files = attachments.map((f, ix) => ({
-      id: ix.toString(),
-      name: f.name,
-      fileType: f.type,
-    }))
-  }
-  // 如果存在链接，现在发送消息中构建空白的链接信息，用于占位，等待解析完成后再修改
-  if (links && links.length > 0) {
-    newUserMsg.links = links.map((l, ix) => ({
-      id: ix.toString(),
-      url: l.url,
-      title: l.url.replace(/^https?:\/\//, ''),
-    }))
-  }
   // 先在聊天列表中插入发送的用户消息
-  insertMessage(currentSessionId, newUserMsg)
+  await insertMessage(sessionId, newUserMsg)
 
-  const settings = getCurrentSessionMergedSettings()
-  const isChatboxAI = settings.provider === ModelProviderEnum.ChatboxAI
+  const globalSettings = settingsStore.getState().getSettings()
+  const isPro = settingActions.isPro()
   const remoteConfig = settingActions.getRemoteConfig()
 
   // 根据需要，插入空白的回复消息
   let newAssistantMsg = createMessage('assistant', '')
-  if (attachments && attachments.length > 0) {
+  if (newUserMsg.files && newUserMsg.files.length > 0) {
     if (!newAssistantMsg.status) {
       newAssistantMsg.status = []
     }
     newAssistantMsg.status.push({
       type: 'sending_file',
-      mode: isChatboxAI ? 'advanced' : 'local',
+      mode: isPro ? 'advanced' : 'local',
     })
   }
-  if (links && links.length > 0) {
+  if (newUserMsg.links && newUserMsg.links.length > 0) {
     if (!newAssistantMsg.status) {
       newAssistantMsg.status = []
     }
     newAssistantMsg.status.push({
       type: 'loading_webpage',
-      mode: isChatboxAI ? 'advanced' : 'local',
+      mode: isPro ? 'advanced' : 'local',
     })
   }
   if (needGenerating) {
     newAssistantMsg.generating = true
-    insertMessage(currentSessionId, newAssistantMsg)
+    await insertMessage(sessionId, newAssistantMsg)
   }
 
   try {
     // 如果本次消息开启了联网问答，需要检查当前模型是否支持
     // 桌面版&手机端总是支持联网问答，不再需要检查模型是否支持
     const dependencies = await createModelDependencies()
-    const model = getModel(settings, { uuid: '' }, dependencies)
+    const model = getModel(settings, globalSettings, { uuid: '' }, dependencies)
     if (webBrowsing && platform.type === 'web' && !model.isSupportToolUse()) {
       if (remoteConfig.setting_chatboxai_first) {
         throw ChatboxAIAPIError.fromCodeName('model_not_support_web_browsing', 'model_not_support_web_browsing')
@@ -626,89 +642,18 @@ export async function submitNewUserMessage(params: {
       }
     }
 
-    // 如果本次发送消息携带了附件，应该在这次发送中上传文件并构造文件信息(file uuid)
-    if (attachments && attachments.length > 0) {
-      if (isChatboxAI) {
-        // Chatbox AI 方案
-        const licenseKey = settingActions.getLicenseKey()
-        const newFiles: MessageFile[] = []
-        for (const attachment of attachments || []) {
-          const storageKey = await remote.uploadAndCreateUserFile(licenseKey || '', attachment)
-          newFiles.push({
-            id: storageKey,
-            name: attachment.name,
-            fileType: attachment.type,
-            storageKey,
-          })
-        }
-        modifyMessage(currentSessionId, { ...newUserMsg, files: newFiles }, false)
-      } else {
-        // 本地方案
-        const newFiles: MessageFile[] = []
-        const tokenLimitPerFile = Math.ceil((40 * 1000) / attachments.length)
-        for (const attachment of attachments) {
-          await new Promise((resolve) => setTimeout(resolve, 3000)) // 等待一段时间，方便显示提示
-          const result = await platform.parseFileLocally(attachment, { tokenLimit: tokenLimitPerFile })
-          if (!result.isSupported || !result.key) {
-            if (platform.type === 'mobile') {
-              throw ChatboxAIAPIError.fromCodeName(
-                'mobile_not_support_local_file_parsing',
-                'mobile_not_support_local_file_parsing'
-              )
-            }
-            // 根据当前 IP，判断是否在错误中推荐 Chatbox AI
-            if (remoteConfig.setting_chatboxai_first) {
-              throw ChatboxAIAPIError.fromCodeName('model_not_support_file', 'model_not_support_file')
-            } else {
-              throw ChatboxAIAPIError.fromCodeName('model_not_support_file_2', 'model_not_support_file_2')
-            }
-          }
-          newFiles.push({
-            id: result.key,
-            name: attachment.name,
-            fileType: attachment.type,
-            storageKey: result.key,
-          })
-        }
-        modifyMessage(currentSessionId, { ...newUserMsg, files: newFiles }, false)
+    // Files and links are now preprocessed in InputBox with storage keys, so no need to process them here
+    // Just verify they have storage keys
+    if (newUserMsg.files?.length) {
+      const missingStorageKeys = newUserMsg.files.filter((f) => !f.storageKey)
+      if (missingStorageKeys.length > 0) {
+        console.warn('Files without storage keys found:', missingStorageKeys)
       }
     }
-    // 如果本次发送消息携带了链接，应该在这次发送中解析链接并构造链接信息(link uuid)
-    if (links && links.length > 0) {
-      if (isChatboxAI) {
-        // Chatbox AI 方案
-        const licenseKey = settingActions.getLicenseKey()
-        const newLinks: MessageLink[] = await Promise.all(
-          links.map(async (l) => {
-            const parsed = await remote.parseUserLinkPro({ licenseKey: licenseKey || '', url: l.url })
-            return {
-              id: parsed.key,
-              url: l.url,
-              title: parsed.title,
-              storageKey: parsed.storageKey,
-            }
-          })
-        )
-        modifyMessage(currentSessionId, { ...newUserMsg, links: newLinks }, false)
-      } else {
-        // 本地方案
-        const newLinks: MessageLink[] = []
-        for (const link of links) {
-          const { key, title } = await localParser.parseUrl(link.url)
-          newLinks.push({
-            id: key,
-            url: link.url,
-            title,
-            storageKey: key,
-          })
-          // 等待一段时间，方便显示提示
-          if (links.length === 1) {
-            await new Promise((resolve) => setTimeout(resolve, 5000))
-          } else {
-            await new Promise((resolve) => setTimeout(resolve, 2500))
-          }
-        }
-        modifyMessage(currentSessionId, { ...newUserMsg, links: newLinks }, false)
+    if (newUserMsg.links?.length) {
+      const missingStorageKeys = newUserMsg.links.filter((l) => !l.storageKey)
+      if (missingStorageKeys.length > 0) {
+        console.warn('Links without storage keys found:', missingStorageKeys)
       }
     }
   } catch (err: unknown) {
@@ -735,22 +680,22 @@ export async function submitNewUserMessage(params: {
       ...newAssistantMsg,
       generating: false,
       cancel: undefined,
-      model: await getModelDisplayName(settings, 'chat'),
+      model: await getModelDisplayName(settings, globalSettings, 'chat'),
       contentParts: [{ type: 'text', text: '' }],
       errorCode,
       error: `${error.message}`, // 这么写是为了避免类型问题
       status: [],
     }
     if (needGenerating) {
-      modifyMessage(currentSessionId, newAssistantMsg)
+      await modifyMessage(sessionId, newAssistantMsg)
     } else {
-      insertMessage(currentSessionId, newAssistantMsg)
+      await insertMessage(sessionId, newAssistantMsg)
     }
     return // 文件上传失败，不再继续生成回复
   }
   // 根据需要，生成这条回复消息
   if (needGenerating) {
-    return generate(currentSessionId, newAssistantMsg, { operationType: 'send_message' })
+    return generate(sessionId, newAssistantMsg, { operationType: 'send_message' })
   }
 }
 
@@ -760,20 +705,19 @@ export async function submitNewUserMessage(params: {
  * @param targetMsg
  * @returns
  */
-export async function generate(
+async function generate(
   sessionId: string,
   targetMsg: Message,
   options?: { operationType?: 'send_message' | 'regenerate' }
 ) {
   // 获得依赖的数据
-  const store = getDefaultStore()
-  const globalSettings = store.get(atoms.settingsAtom)
+  const session = await chatStore.getSession(sessionId)
+  const settings = await chatStore.getSessionSettings(sessionId)
+  const globalSettings = settingsStore.getState().getSettings()
   const configs = await platform.getConfig()
-  const session = getSession(sessionId)
-  if (!session) {
+  if (!session || !settings) {
     return
   }
-  const settings = session.settings ? mergeSettings(globalSettings, session.settings, session.type) : globalSettings
 
   // 跟踪生成事件
   trackGenerateEvent(settings, globalSettings, session.type, options)
@@ -785,7 +729,7 @@ export async function generate(
     // pictures: session.type === 'picture' ? createLoadingPictures(settings.imageGenerateNum) : targetMsg.pictures,
     cancel: undefined,
     aiProvider: settings.provider,
-    model: await getModelDisplayName(settings, session.type || 'chat'),
+    model: await getModelDisplayName(settings, globalSettings, session.type || 'chat'),
     style: session.type === 'picture' ? settings.dalleStyle : undefined,
     generating: true,
     errorCode: undefined,
@@ -797,10 +741,10 @@ export async function generate(
     isStreamingMode: settings.stream !== false,
   }
 
-  modifyMessage(sessionId, targetMsg)
-  setTimeout(() => {
-    scrollActions.scrollToMessage(targetMsg.id, 'end')
-  }, 50) // 等待消息渲染完成后再滚动到底部，否则会出现滚动不到底部的问题
+  await modifyMessage(sessionId, targetMsg)
+  // setTimeout(() => {
+  //   scrollActions.scrollToMessage(targetMsg.id, 'end')
+  // }, 50) // 等待消息渲染完成后再滚动到底部，否则会出现滚动不到底部的问题
 
   // 获取目标消息所在的消息列表（可能是历史消息），获取目标消息的索引
   let messages = session.messages
@@ -823,35 +767,42 @@ export async function generate(
 
   try {
     const dependencies = await createModelDependencies()
-    const model = getModel(settings, configs, dependencies)
-    const sessionKnowledgeBaseMap = store.get(atoms.sessionKnowledgeBaseMapAtom)
+    const model = getModel(settings, globalSettings, configs, dependencies)
+    const sessionKnowledgeBaseMap = uiStore.getState().sessionKnowledgeBaseMap
     const knowledgeBase = sessionKnowledgeBaseMap[sessionId]
-    const webBrowsing = store.get(atoms.inputBoxWebBrowsingModeAtom)
+    const webBrowsing = uiStore.getState().inputBoxWebBrowsingMode
     switch (session.type) {
       // 对话消息生成
       case 'chat':
       case undefined: {
         const startTime = Date.now()
         let firstTokenLatency: number | undefined
-        const promptMsgs = await genMessageContext(settings, messages.slice(0, targetMsgIx))
-        const throttledModifyMessage = throttle<onResultChangeWithCancel>((updated) => {
-          const text = getMessageText(targetMsg)
-          if (!firstTokenLatency && text.length > 0) {
+        const persistInterval = 2000
+        let lastPersistTimestamp = Date.now()
+        const promptMsgs = await genMessageContext(settings, messages.slice(0, targetMsgIx), model.isSupportToolUse())
+        const modifyMessageCache: OnResultChangeWithCancel = async (updated) => {
+          const textLength = getMessageText(targetMsg, true, true).length
+          if (!firstTokenLatency && textLength > 0) {
             firstTokenLatency = Date.now() - startTime
           }
           targetMsg = {
             ...targetMsg,
             ...pickBy(updated, identity),
-            status: text.length > 0 ? [] : targetMsg.status,
+            status: textLength > 0 ? [] : targetMsg.status,
             firstTokenLatency,
           }
-          modifyMessage(sessionId, targetMsg)
-        }, 100)
+          // update cache on each chunk and persist to storage periodically
+          const shouldPersist = Date.now() - lastPersistTimestamp >= persistInterval
+          await modifyMessage(sessionId, targetMsg, false, !shouldPersist)
+          if (shouldPersist) {
+            lastPersistTimestamp = Date.now()
+          }
+        }
 
         const result = await streamText(model, {
-          sessionId,
+          sessionId: session.id,
           messages: promptMsgs,
-          onResultChangeWithCancel: throttledModifyMessage,
+          onResultChangeWithCancel: modifyMessageCache,
           providerOptions: settings.providerOptions,
           knowledgeBase,
           webBrowsing,
@@ -863,42 +814,45 @@ export async function generate(
           tokensUsed: targetMsg.tokensUsed ?? estimateTokensFromMessages([...promptMsgs, targetMsg]),
           status: [],
           finishReason: result.finishReason,
+          usage: result.usage,
         }
-        modifyMessage(sessionId, targetMsg, true)
+        await modifyMessage(sessionId, targetMsg, true)
         break
       }
       // 图片消息生成
       case 'picture': {
         // 取当前消息之前最近的一条用户消息作为 prompt
-        let prompt = ''
-        for (let i = targetMsgIx; i >= 0; i--) {
-          if (messages[i].role === 'user') {
-            prompt = getMessageText(messages[i])
-            break
-          }
+        const userMessage = messages.slice(0, targetMsgIx).findLast((m) => m.role === 'user')
+        if (!userMessage) {
+          // 不应该找不到用户消息
+          throw new Error('No user message found')
         }
-        const insertImage = (image: MessageImagePart) => {
+
+        const insertImage = async (image: MessageImagePart) => {
           targetMsg.contentParts.push(image)
           targetMsg.status = []
-          modifyMessage(sessionId, targetMsg, true)
+          await modifyMessage(sessionId, targetMsg, true)
         }
-        await generateImage(model, {
-          prompt,
-          num: settings.imageGenerateNum || 1,
-          callback: async (picBase64) => {
-            const storageKey = StorageKeyGenerator.picture(`${sessionId}:${targetMsg.id}`)
+        await generateImage(
+          model,
+          {
+            message: userMessage,
+            num: settings.imageGenerateNum || 1,
+          },
+          async (picBase64) => {
+            const storageKey = StorageKeyGenerator.picture(`${session.id}:${targetMsg.id}`)
             // 图片需要存储到 indexedDB，如果直接使用 OpenAI 返回的图片链接，图片链接将随着时间而失效
             await storage.setBlob(storageKey, picBase64)
-            insertImage({ type: 'image', storageKey })
-          },
-        })
+            await insertImage({ type: 'image', storageKey })
+          }
+        )
         targetMsg = {
           ...targetMsg,
           generating: false,
           cancel: undefined,
           status: [],
         }
-        modifyMessage(sessionId, targetMsg, true)
+        await modifyMessage(sessionId, targetMsg, true)
         break
       }
       default:
@@ -937,7 +891,7 @@ export async function generate(
       },
       status: [],
     }
-    modifyMessage(sessionId, targetMsg, true)
+    await modifyMessage(sessionId, targetMsg, true)
   }
 }
 
@@ -948,33 +902,66 @@ export async function generate(
  */
 export async function generateMore(sessionId: string, msgId: string) {
   const newAssistantMsg = createMessage('assistant', '')
-  insertMessageAfter(sessionId, newAssistantMsg, msgId)
+  newAssistantMsg.generating = true // prevent estimating token count before generating done
+  await insertMessageAfter(sessionId, newAssistantMsg, msgId)
   await generate(sessionId, newAssistantMsg, { operationType: 'regenerate' })
 }
 
 export async function generateMoreInNewFork(sessionId: string, msgId: string) {
-  await createNewFork(msgId)
+  await createNewFork(sessionId, msgId)
   await generateMore(sessionId, msgId)
 }
 
-export async function regenerateInNewFork(sessionId: string, msg: Message) {
-  const messageList = getCurrentMessages()
-  const messageIndex = messageList.findIndex((m) => m.id === msg.id)
-  const previousMessageIndex = messageIndex - 1
-  if (previousMessageIndex < 0) {
-    // 如果目标消息是第一条消息，则直接重新生成
-    generate(sessionId, msg, { operationType: 'regenerate' })
+type MessageLocation = { list: Message[]; index: number }
+
+function findMessageLocation(session: Session, messageId: string): MessageLocation | null {
+  const rootIndex = session.messages.findIndex((m) => m.id === messageId)
+  if (rootIndex >= 0) {
+    return { list: session.messages, index: rootIndex }
+  }
+  if (!session.threads) {
+    return null
+  }
+  for (const thread of session.threads) {
+    const idx = thread.messages.findIndex((m) => m.id === messageId)
+    if (idx >= 0) {
+      return { list: thread.messages, index: idx }
+    }
+  }
+  return null
+}
+
+type GenerateMoreFn = (sessionId: string, msgId: string) => Promise<void>
+
+export async function regenerateInNewFork(
+  sessionId: string,
+  msg: Message,
+  options?: { runGenerateMore?: GenerateMoreFn }
+) {
+  const runGenerateMore = options?.runGenerateMore ?? generateMore
+  const session = await chatStore.getSession(sessionId)
+  if (!session) {
     return
   }
-  const forkMessage = messageList[previousMessageIndex]
-  await createNewFork(forkMessage.id)
-  return generateMore(sessionId, forkMessage.id)
+  const location = findMessageLocation(session, msg.id)
+  if (!location) {
+    await generate(sessionId, msg, { operationType: 'regenerate' })
+    return
+  }
+  const previousMessageIndex = location.index - 1
+  if (previousMessageIndex < 0) {
+    // 如果目标消息是第一条消息，则直接重新生成
+    await generate(sessionId, msg, { operationType: 'regenerate' })
+    return
+  }
+  const forkMessage = location.list[previousMessageIndex]
+  await createNewFork(sessionId, forkMessage.id)
+  return runGenerateMore(sessionId, forkMessage.id)
 }
 
 async function _generateName(sessionId: string, modifyName: (sessionId: string, name: string) => void) {
-  const store = getDefaultStore()
-  const globalSettings = store.get(atoms.settingsAtom)
-  const session = getSession(sessionId)
+  const session = await chatStore.getSession(sessionId)
+  const globalSettings = settingsStore.getState().getSettings()
   if (!session) {
     return
   }
@@ -997,7 +984,7 @@ async function _generateName(sessionId: string, modifyName: (sessionId: string, 
   const configs = await platform.getConfig()
   try {
     const dependencies = await createModelDependencies()
-    const model = getModel(settings, configs, dependencies)
+    const model = getModel(settings, globalSettings, configs, dependencies)
     const result = await generateText(
       model,
       promptFormat.nameConversation(
@@ -1012,7 +999,7 @@ async function _generateName(sessionId: string, modifyName: (sessionId: string, 
         .join('') || ''
     name = name.replace(/['"“”]/g, '').replace(/<think>.*?<\/think>/g, '')
     // name = name.slice(0, 10)    // 限制名字长度
-    modifyName(session.id, name)
+    modifyName(sessionId, name)
   } catch (e: unknown) {
     if (!(e instanceof ApiError || e instanceof NetworkError)) {
       Sentry.captureException(e) // unexpected error should be reported
@@ -1023,12 +1010,12 @@ async function _generateName(sessionId: string, modifyName: (sessionId: string, 
 // 全局跟踪正在进行的名称生成请求
 const pendingNameGenerations = new Map<string, ReturnType<typeof setTimeout>>()
 const activeNameGenerations = new Set<string>()
-export async function generateNameAndThreadName(sessionId: string) {
-  return _generateName(sessionId, modifyNameAndThreadName)
+async function generateNameAndThreadName(sessionId: string) {
+  return await _generateName(sessionId, modifyNameAndThreadName)
 }
 
-export async function generateThreadName(sessionId: string) {
-  return _generateName(sessionId, modifyThreadName)
+async function generateThreadName(sessionId: string) {
+  return await _generateName(sessionId, modifyThreadName)
 }
 
 /**
@@ -1094,19 +1081,35 @@ export function scheduleGenerateThreadName(sessionId: string) {
 
   pendingNameGenerations.set(key, timeout)
 }
+const clearSessionList = async (keepNum: number) => {
+  const sessionMetaList = await chatStore.listSessionsMeta()
+  const deleted = sessionMetaList?.slice(keepNum)
+  if (!deleted?.length) {
+    return
+  }
+  for (const s of deleted) {
+    await chatStore.deleteSession(s.id)
+  }
+  await chatStore.updateSessionList((sessions) => {
+    if (!sessions) {
+      throw new Error('Session list not found')
+    }
+    return sessions.filter((s) => !deleted?.some((d) => d.id === s.id))
+  })
+}
 
 /**
  * 清理会话列表，保留指定数量的会话
  * @param keepNum 保留的会话数量（顶部顺序）
  */
-export function clearConversationList(keepNum: number) {
-  clearConversations(keepNum)
+export async function clearConversationList(keepNum: number) {
+  await clearSessionList(keepNum)
 }
 
 /**
  * 从历史消息中生成 prompt 上下文
  */
-async function genMessageContext(settings: Settings, msgs: Message[]) {
+async function genMessageContext(settings: SessionSettings, msgs: Message[], modelSupportToolUse: boolean) {
   const {
     // openaiMaxContextTokens,
     maxContextMessageCount,
@@ -1144,18 +1147,23 @@ async function genMessageContext(settings: Settings, msgs: Message[]) {
     }
 
     // 如果消息中包含本地文件（消息中携带有本地文件的storageKey），则将文件内容也作为 prompt 的一部分
+    let attachmentIndex = 1
     if (msg.files && msg.files.length > 0) {
-      for (const [fileIndex, file] of msg.files.entries()) {
+      for (const file of msg.files) {
         if (file.storageKey) {
           msg = cloneMessage(msg) // 复制一份消息，避免修改原始消息
           const content = await storage.getBlob(file.storageKey).catch(() => '')
           if (content) {
             let attachment = `\n\n<ATTACHMENT_FILE>\n`
-            attachment += `<FILE_INDEX>File ${fileIndex + 1}</FILE_INDEX>\n`
-            attachment += `<FILE_NAME>${file.name}</FILE_NAME>\n`
-            attachment += '<FILE_CONTENT>\n'
-            attachment += `${content}\n`
-            attachment += '</FILE_CONTENT>\n'
+            attachment += `<FILE_INDEX>File ${attachmentIndex++}</FILE_INDEX>\n`
+            attachment += `<FILE_NAME>${file.storageKey}</FILE_NAME>\n`
+            attachment += `<FILE_LINES>${content.split('\n').length}</FILE_LINES>\n`
+            attachment += `<FILE_SIZE>${content.length} bytes</FILE_SIZE>\n`
+            if (!modelSupportToolUse) {
+              attachment += '<FILE_CONTENT>\n'
+              attachment += `${content}\n`
+              attachment += '</FILE_CONTENT>\n'
+            }
             attachment += `</ATTACHMENT_FILE>\n`
             msg = mergeMessages(msg, createMessage(msg.role, attachment))
           }
@@ -1164,18 +1172,22 @@ async function genMessageContext(settings: Settings, msgs: Message[]) {
     }
     // 如果消息中包含本地链接（消息中携带有本地链接的storageKey），则将链接内容也作为 prompt 的一部分
     if (msg.links && msg.links.length > 0) {
-      for (const [linkIndex, link] of msg.links.entries()) {
+      for (const link of msg.links) {
         if (link.storageKey) {
           msg = cloneMessage(msg) // 复制一份消息，避免修改原始消息
           const content = await storage.getBlob(link.storageKey).catch(() => '')
           if (content) {
-            let attachment = `\n\n<ATTACHMENT_LINK>\n`
-            attachment += `<LINK_INDEX>${linkIndex + 1}</LINK_INDEX>\n`
-            attachment += `<LINK_URL>${link.url}</LINK_URL>\n`
-            attachment += `<LINK_CONTENT>\n`
-            attachment += `${content}\n`
-            attachment += '</LINK_CONTENT>\n'
-            attachment += `</ATTACHMENT_LINK>\n`
+            let attachment = `\n\n<ATTACHMENT_FILE>\n`
+            attachment += `<FILE_INDEX>${attachmentIndex++}</FILE_INDEX>\n`
+            attachment += `<FILE_NAME>${link.storageKey}</FILE_NAME>\n`
+            attachment += `<FILE_LINES>${content.split('\n').length}</FILE_LINES>\n`
+            attachment += `<FILE_SIZE>${content.length} bytes</FILE_SIZE>\n`
+            if (!modelSupportToolUse) {
+              attachment += `<FILE_CONTENT>\n`
+              attachment += `${content}\n`
+              attachment += '</FILE_CONTENT>\n'
+            }
+            attachment += `</ATTACHMENT_FILE>\n`
             msg = mergeMessages(msg, createMessage(msg.role, attachment))
           }
         }
@@ -1191,64 +1203,26 @@ async function genMessageContext(settings: Settings, msgs: Message[]) {
   return prompts
 }
 
-export function initEmptyChatSession(): Omit<Session, 'id'> {
-  const store = getDefaultStore()
-  const settings = store.get(atoms.settingsAtom)
-  const chatSessionSettings = store.get(atoms.chatSessionSettingsAtom)
-  const newSession: Omit<Session, 'id'> = {
-    name: 'Untitled',
-    type: 'chat',
-    messages: [],
-    settings: {
-      maxContextMessageCount: settings.maxContextMessageCount || 6,
-      temperature: settings.temperature || undefined,
-      topP: settings.topP || undefined,
-      ...(settings.defaultChatModel
-        ? {
-            provider: settings.defaultChatModel.provider,
-            modelId: settings.defaultChatModel.model,
-          }
-        : chatSessionSettings),
-    },
-  }
-  if (settings.defaultPrompt) {
-    newSession.messages.push(createMessage('system', settings.defaultPrompt || defaults.getDefaultPrompt()))
-  }
-  return newSession
-}
+// export function getSessions() {
+//   const store = getDefaultStore()
+//   return store.get(atoms.sessionsListAtom)
+// }
 
-export function initEmptyPictureSession(): Omit<Session, 'id'> {
-  const store = getDefaultStore()
-  const pictureSessionSettings = store.get(atoms.pictureSessionSettingsAtom)
-  return {
-    name: 'Untitled',
-    type: 'picture',
-    messages: [createMessage('system', i18n.t('Image Creator Intro') || '')],
-    settings: {
-      ...pictureSessionSettings,
-    },
-  }
-}
+// export function getSortedSessions() {
+//   const store = getDefaultStore()
+//   return store.get(atoms.sortedSessionsListAtom)
+// }
 
-export function getSessions() {
-  const store = getDefaultStore()
-  return store.get(atoms.sessionsListAtom)
-}
+// export async function getCurrentSession() {
+//   const store = getDefaultStore()
+//   const currentSessionId = store.get(atoms.currentSessionIdAtom)
+//   return getSessionById(currentSessionId)
+// }
 
-export function getSortedSessions() {
-  const store = getDefaultStore()
-  return store.get(atoms.sortedSessionsListAtom)
-}
-
-export function getCurrentSession() {
-  const store = getDefaultStore()
-  return store.get(atoms.currentSessionAtom)
-}
-
-export function getCurrentMessages() {
-  const store = getDefaultStore()
-  return store.get(atoms.currentMessageListAtom)
-}
+// export async function getCurrentMessages() {
+//   const currentSession = await getCurrentSession()
+//   return currentSession?.messages || []
+// }
 
 /**
  * 寻找某个消息所在的话题消息列表
@@ -1256,8 +1230,8 @@ export function getCurrentMessages() {
  * @param messageId 消息ID
  * @returns 消息所在的话题消息列表
  */
-export function getMessageThreadContext(sessionId: string, messageId: string): Message[] {
-  const session = getSession(sessionId)
+export async function getMessageThreadContext(sessionId: string, messageId: string): Promise<Message[]> {
+  const session = await chatStore.getSession(sessionId)
   if (!session) {
     return []
   }
@@ -1275,371 +1249,391 @@ export function getMessageThreadContext(sessionId: string, messageId: string): M
   return []
 }
 
-// export function mergeSettings(
-//   globalSettings: Settings,
-//   sessionSetting: SessionSettings,
-//   sessionType?: 'picture' | 'chat'
-// ): Settings {
-//   let specialSettings = sessionSetting
-//   // 过滤掉会话专属设置中不应该存在的设置项，为了兼容旧版本数据和防止疏漏
-//   switch (sessionType) {
-//     case 'picture':
-//       specialSettings = pickPictureSettings(specialSettings as Settings)
-//       break
-//     case undefined:
-//     case 'chat':
-//     default:
-//       specialSettings = settings2SessionSettings(specialSettings as Settings)
-//       break
-//   }
-//   specialSettings = omit(specialSettings) // 需要 omit 来去除 undefined，否则会覆盖掉全局配置
-//   const ret = {
-//     ...globalSettings,
-//     ...specialSettings, // 会话配置优先级高于全局配置
-//   }
-//   // 对于自定义模型提供方，只有模型 model 可以被会话配置覆盖
-//   if (ret.customProviders) {
-//     ret.customProviders = globalSettings.customProviders.map((provider) => {
-//       if (specialSettings.customProviders) {
-//         const specialProvider = specialSettings.customProviders.find((p) => p.id === provider.id)
-//         if (specialProvider) {
-//           return {
-//             ...provider,
-//             model: specialProvider.model, // model 字段的会话配置优先级高于全局配置
-//           }
-//         }
-//       }
-//       return provider
-//     })
-//   }
-//   return ret
-// }
-
-export function mergeSettings(
-  globalSettings: Settings,
-  sessionSetting: SessionSettings,
-  sessionType?: 'picture' | 'chat'
-): Settings {
-  return {
-    ...globalSettings,
-    ...(sessionType === 'picture'
-      ? {
-          imageGenerateNum: defaults.pictureSessionSettings().imageGenerateNum,
-          dalleStyle: defaults.pictureSessionSettings().dalleStyle,
-        }
-      : {
-          maxContextMessageCount: defaults.chatSessionSettings().maxContextMessageCount,
-        }),
-    ...sessionSetting,
+export async function exportSessionChat(sessionId: string, content: ExportChatScope, format: ExportChatFormat) {
+  const session = await chatStore.getSession(sessionId)
+  if (!session) {
+    return
   }
+  await exportChat(session, content, format)
 }
 
-export function getCurrentSessionMergedSettings() {
-  const store = getDefaultStore()
-  const globalSettings = store.get(atoms.settingsAtom)
-  const session = store.get(atoms.currentSessionAtom)
-  if (!session || !session.settings) {
-    return globalSettings
-  }
-  return mergeSettings(globalSettings, session.settings, session.type)
+export async function createNewFork(sessionId: string, forkMessageId: string) {
+  await chatStore.updateSessionWithMessages(sessionId, (session) => {
+    if (!session) {
+      throw new Error('Session not found')
+    }
+    const patch = buildCreateForkPatch(session, forkMessageId)
+    if (!patch) {
+      return session
+    }
+    return {
+      ...session,
+      ...patch,
+    }
+  })
 }
 
-export async function exportChat(session: Session, scope: ExportChatScope, format: ExportChatFormat) {
-  const threads: SessionThread[] = scope === 'all_threads' ? session.threads || [] : []
-  threads.push({
-    id: session.id,
-    name: session.threadName || session.name,
-    messages: session.messages,
-    createdAt: Date.now(),
+export async function switchFork(sessionId: string, forkMessageId: string, direction: 'next' | 'prev') {
+  await chatStore.updateSessionWithMessages(sessionId, (session) => {
+    if (!session) {
+      throw new Error('Session not found')
+    }
+    const patch = buildSwitchForkPatch(session, forkMessageId, direction)
+    if (!patch) {
+      return session
+    }
+    return {
+      ...session,
+      ...patch,
+    } as typeof session
+  })
+}
+
+type MessageForkEntry = NonNullable<Session['messageForksHash']>[string]
+
+function buildSwitchForkPatch(
+  session: Session,
+  forkMessageId: string,
+  direction: 'next' | 'prev'
+): Partial<Session> | null {
+  const { messageForksHash } = session
+  if (!messageForksHash) {
+    return null
+  }
+
+  const forkEntry = messageForksHash[forkMessageId]
+  if (!forkEntry || forkEntry.lists.length <= 1) {
+    return null
+  }
+
+  const rootResult = switchForkInMessages(session.messages, forkEntry, forkMessageId, direction)
+  if (rootResult) {
+    const { messages, fork } = rootResult
+    return {
+      messages,
+      messageForksHash: {
+        ...messageForksHash,
+        [forkMessageId]: fork,
+      },
+    }
+  }
+
+  if (!session.threads?.length) {
+    return null
+  }
+
+  let updatedFork: MessageForkEntry | null = null
+  const updatedThreads = session.threads.map((thread) => {
+    if (updatedFork) {
+      return thread
+    }
+    const result = switchForkInMessages(thread.messages, forkEntry, forkMessageId, direction)
+    if (!result) {
+      return thread
+    }
+    updatedFork = result.fork
+    return {
+      ...thread,
+      messages: result.messages,
+    }
   })
 
-  if (format === 'Markdown') {
-    const content = formatChatAsMarkdown(session.name, threads)
-    platform.exporter.exportTextFile(`${session.name}.md`, content)
-  } else if (format === 'TXT') {
-    const content = formatChatAsTxt(session.name, threads)
-    platform.exporter.exportTextFile(`${session.name}.txt`, content)
-  } else if (format === 'HTML') {
-    const content = await formatChatAsHtml(session.name, threads)
-    platform.exporter.exportTextFile(`${session.name}.html`, content)
+  if (!updatedFork) {
+    return null
+  }
+
+  return {
+    threads: updatedThreads,
+    messageForksHash: {
+      ...messageForksHash,
+      [forkMessageId]: updatedFork,
+    },
   }
 }
 
-export async function exportCurrentSessionChat(content: ExportChatScope, format: ExportChatFormat) {
-  const store = getDefaultStore()
-  const currentSession = store.get(atoms.currentSessionAtom)
-  if (!currentSession) {
-    return
-  }
-  await exportChat(currentSession, content, format)
-}
-
-export async function createNewFork(forkMessageId: string) {
-  const store = getDefaultStore()
-  const currentSession = store.get(atoms.currentSessionAtom)
-  if (!currentSession) {
-    return
+function switchForkInMessages(
+  messages: Message[],
+  forkEntry: MessageForkEntry,
+  forkMessageId: string,
+  direction: 'next' | 'prev'
+): { messages: Message[]; fork: MessageForkEntry } | null {
+  const forkMessageIndex = messages.findIndex((m) => m.id === forkMessageId)
+  if (forkMessageIndex < 0) {
+    return null
   }
 
-  const messageForksHash = currentSession.messageForksHash || {}
+  const total = forkEntry.lists.length
+  const newPosition = direction === 'next' ? (forkEntry.position + 1) % total : (forkEntry.position - 1 + total) % total
 
-  const updateFn = (data: Message[]): { data: Message[]; updated: boolean } => {
-    const forkMessageIndex = data.findIndex((m) => m.id === forkMessageId)
-    if (forkMessageIndex < 0) {
-      return { data, updated: false }
-    }
-    const forks = messageForksHash[forkMessageId] || {
-      position: 0,
-      lists: [
-        {
-          id: `fork_list_${uuidv4()}`,
-          messages: [],
-        },
-      ],
-      createdAt: Date.now(),
-    }
-    // 下方消息存储到当前游标位置
-    const backupMessages = data.slice(forkMessageIndex + 1)
-    if (backupMessages.length === 0) {
-      return { data, updated: false }
-    }
-    forks.lists[forks.position] = {
-      id: `fork_list_${uuidv4()}`,
-      messages: backupMessages,
-    }
-    // 创建另一个新分支，作为新的游标位置
-    forks.lists.push({
-      id: `fork_list_${uuidv4()}`,
-      messages: [],
-    })
-    forks.position = forks.lists.length - 1
+  const currentTail = messages.slice(forkMessageIndex + 1)
+  const branchMessages = forkEntry.lists[newPosition]?.messages ?? []
 
-    messageForksHash[forkMessageId] = forks
-    data = data.slice(0, forkMessageIndex + 1)
-
-    // clean empty fork / LRU fork when reaching MAX_FORK_COUNT
-    const keys = Object.keys(messageForksHash)
-    const MAX_FORK_COUNT = 50
-    if (keys.length > MAX_FORK_COUNT) {
-      const forkWeights = keys.map((key) => {
-        const fork = messageForksHash[key]
-        const totalMessages = fork.lists.reduce((sum, list) => sum + list.messages.length, 0)
-        const isEmpty = totalMessages === 0
-        const daysSinceCreated = (Date.now() - fork.createdAt) / (1000 * 60 * 60 * 24)
-        let weight = totalMessages * 10 - daysSinceCreated
-        // specially handle empty forkMessages
-        if (isEmpty) {
-          weight -= 1000
+  const updatedFork: MessageForkEntry = {
+    ...forkEntry,
+    position: newPosition,
+    lists: forkEntry.lists.map((list, index) => {
+      if (index === forkEntry.position && forkEntry.position !== newPosition) {
+        return {
+          ...list,
+          messages: currentTail,
         }
-        return { key, weight, totalMessages, isEmpty, createdAt: fork.createdAt }
-      })
-
-      forkWeights.sort((a, b) => a.weight - b.weight)
-
-      const toDelete = forkWeights.slice(0, keys.length - MAX_FORK_COUNT)
-      toDelete.forEach((item) => {
-        delete messageForksHash[item.key]
-      })
-    }
-
-    return { data, updated: true }
+      }
+      if (index === newPosition) {
+        return {
+          ...list,
+          messages: [],
+        }
+      }
+      return list
+    }),
   }
 
-  const { data, updated } = updateFn(currentSession.messages)
-  if (updated) {
-    saveSession({
-      id: currentSession.id,
-      messages: data,
-      messageForksHash,
-    })
-    // scrollActions.scrollToMessage(forkMessageId, 'start')
-    return
-  }
-  for (let i = (currentSession.threads || []).length - 1; i >= 0; i--) {
-    const thread = (currentSession.threads || [])[i]
-    const { data, updated } = updateFn(thread.messages)
-    if (updated) {
-      saveSession({
-        id: currentSession.id,
-        threads: currentSession.threads?.map((t) => (t.id === thread.id ? { ...t, messages: data } : t)),
-        messageForksHash,
-      })
-      // scrollActions.scrollToMessage(forkMessageId, 'start')
-      return
-    }
+  return {
+    messages: messages.slice(0, forkMessageIndex + 1).concat(branchMessages),
+    fork: updatedFork,
   }
 }
 
-export async function switchFork(forkMessageId: string, direction: 'next' | 'prev') {
-  const store = getDefaultStore()
-  const currentSession = store.get(atoms.currentSessionAtom)
-  if (!currentSession || !currentSession.messageForksHash) {
-    return
-  }
-  const messageForksHash = currentSession.messageForksHash
+function buildCreateForkPatch(session: Session, forkMessageId: string): Partial<Session> | null {
+  return applyForkTransform(
+    session,
+    forkMessageId,
+    () =>
+      session.messageForksHash?.[forkMessageId] ?? {
+        position: 0,
+        lists: [
+          {
+            id: `fork_list_${uuidv4()}`,
+            messages: [],
+          },
+        ],
+        createdAt: Date.now(),
+      },
+    (messages, forkEntry) => {
+      const forkMessageIndex = messages.findIndex((m) => m.id === forkMessageId)
+      if (forkMessageIndex < 0) {
+        return null
+      }
 
-  const updateFn = (data: Message[]): { data: Message[]; updated: boolean } => {
-    const forks = messageForksHash[forkMessageId]
-    if (forks.lists.length === 0) {
-      return { data, updated: false }
+      const backupMessages = messages.slice(forkMessageIndex + 1)
+      if (backupMessages.length === 0) {
+        return null
+      }
+
+      const storedListId = `fork_list_${uuidv4()}`
+      const newBranchId = `fork_list_${uuidv4()}`
+      const lists = forkEntry.lists.map((list, index) =>
+        index === forkEntry.position
+          ? {
+              id: storedListId,
+              messages: backupMessages,
+            }
+          : list
+      )
+      const nextPosition = lists.length
+      const updatedFork: MessageForkEntry = {
+        ...forkEntry,
+        position: nextPosition,
+        lists: [
+          ...lists,
+          {
+            id: newBranchId,
+            messages: [],
+          },
+        ],
+      }
+
+      return {
+        messages: messages.slice(0, forkMessageIndex + 1),
+        forkEntry: updatedFork,
+      }
     }
-    const forkMessageIndex = data.findIndex((m) => m.id === forkMessageId)
-    if (forkMessageIndex < 0) {
-      return { data, updated: false }
+  )
+}
+
+function buildDeleteForkPatch(session: Session, forkMessageId: string): Partial<Session> | null {
+  return applyForkTransform(
+    session,
+    forkMessageId,
+    () => session.messageForksHash?.[forkMessageId] ?? null,
+    (messages, forkEntry) => {
+      const forkMessageIndex = messages.findIndex((m) => m.id === forkMessageId)
+      if (forkMessageIndex < 0) {
+        return null
+      }
+
+      const trimmedMessages = messages.slice(0, forkMessageIndex + 1)
+      const remainingLists = forkEntry.lists.filter((_, index) => index !== forkEntry.position)
+
+      if (remainingLists.length === 0) {
+        return {
+          messages: trimmedMessages,
+          forkEntry: null,
+        }
+      }
+
+      const nextPosition = Math.min(forkEntry.position, remainingLists.length - 1)
+      const carryMessages = remainingLists[nextPosition]?.messages ?? []
+      const updatedLists = remainingLists.map((list, index) =>
+        index === nextPosition
+          ? {
+              ...list,
+              messages: [],
+            }
+          : list
+      )
+
+      return {
+        messages: trimmedMessages.concat(carryMessages),
+        forkEntry: {
+          ...forkEntry,
+          position: nextPosition,
+          lists: updatedLists,
+        },
+      }
     }
-    const newPosition =
-      direction === 'next'
-        ? (forks.position + 1) % forks.lists.length
-        : (forks.position - 1 + forks.lists.length) % forks.lists.length
-    // 当前被分叉的消息存储在当前的游标位置
-    forks.lists[forks.position].messages = data.slice(forkMessageIndex + 1)
-    // 当前消息列表中移除被分叉的消息，并且添加新的游标位置的消息
-    data = data.slice(0, forkMessageIndex + 1).concat(forks.lists[newPosition].messages)
-    // 更新游标位置
-    forks.position = newPosition
-    // 清空新的游标位置的消息（因为已经在主分支了，所以清理以节省空间）
-    forks.lists[newPosition].messages = []
-    messageForksHash[forkMessageId] = forks
-    return { data, updated: true }
+  )
+}
+
+function buildExpandForkPatch(session: Session, forkMessageId: string): Partial<Session> | null {
+  return applyForkTransform(
+    session,
+    forkMessageId,
+    () => session.messageForksHash?.[forkMessageId] ?? null,
+    (messages, forkEntry) => {
+      const forkMessageIndex = messages.findIndex((m) => m.id === forkMessageId)
+      if (forkMessageIndex < 0) {
+        return null
+      }
+
+      const mergedMessages = forkEntry.lists.flatMap((list) => list.messages)
+      if (mergedMessages.length === 0) {
+        return {
+          messages,
+          forkEntry: null,
+        }
+      }
+      return {
+        messages: messages.concat(mergedMessages),
+        forkEntry: null,
+      }
+    }
+  )
+}
+
+type ForkTransformResult = { messages: Message[]; forkEntry: MessageForkEntry | null }
+type ForkTransform = (messages: Message[], forkEntry: MessageForkEntry) => ForkTransformResult | null
+
+function applyForkTransform(
+  session: Session,
+  forkMessageId: string,
+  ensureForkEntry: () => MessageForkEntry | null,
+  transform: ForkTransform
+): Partial<Session> | null {
+  const tryTransform = (messages: Message[]): ForkTransformResult | null => {
+    const forkEntry = ensureForkEntry()
+    if (!forkEntry) {
+      return null
+    }
+    return transform(messages, forkEntry)
   }
 
-  const { data, updated } = updateFn(currentSession.messages)
-  if (updated) {
-    saveSession({
-      id: currentSession.id,
-      messages: data,
-      messageForksHash,
-    })
-    // scrollActions.scrollToMessage(forkMessageId, 'start')
-    return
-  }
-  for (let i = (currentSession.threads || []).length - 1; i >= 0; i--) {
-    const thread = (currentSession.threads || [])[i]
-    const { data, updated } = updateFn(thread.messages)
-    if (updated) {
-      saveSession({
-        id: currentSession.id,
-        threads: currentSession.threads?.map((t) => (t.id === thread.id ? { ...t, messages: data } : t)),
-        messageForksHash,
-      })
-      // scrollActions.scrollToMessage(forkMessageId, 'start')
-      return
+  const rootResult = tryTransform(session.messages)
+  if (rootResult) {
+    return {
+      messages: rootResult.messages,
+      messageForksHash: computeNextMessageForksHash(session.messageForksHash, forkMessageId, rootResult.forkEntry),
     }
   }
+
+  if (!session.threads?.length) {
+    return null
+  }
+
+  let updatedFork: MessageForkEntry | null = null
+  let changed = false
+  const updatedThreads = session.threads.map((thread) => {
+    if (changed) {
+      return thread
+    }
+    const result = tryTransform(thread.messages)
+    if (!result) {
+      return thread
+    }
+    changed = true
+    updatedFork = result.forkEntry
+    return {
+      ...thread,
+      messages: result.messages,
+    }
+  })
+
+  if (!changed) {
+    return null
+  }
+
+  return {
+    threads: updatedThreads,
+    messageForksHash: computeNextMessageForksHash(session.messageForksHash, forkMessageId, updatedFork),
+  }
+}
+
+function computeNextMessageForksHash(
+  current: Session['messageForksHash'],
+  forkMessageId: string,
+  nextEntry: MessageForkEntry | null
+): Session['messageForksHash'] | undefined {
+  if (nextEntry) {
+    return {
+      ...(current ?? {}),
+      [forkMessageId]: nextEntry,
+    }
+  }
+
+  if (!current || !Object.hasOwn(current, forkMessageId)) {
+    return current
+  }
+
+  const { [forkMessageId]: _removed, ...rest } = current
+  return Object.keys(rest).length ? rest : undefined
 }
 
 /**
  * 删除某个消息的当前分叉
  * @param forkMessageId 消息ID
  */
-export async function deleteFork(forkMessageId: string) {
-  const store = getDefaultStore()
-  const currentSession = store.get(atoms.currentSessionAtom)
-  if (!currentSession || !currentSession.messageForksHash) {
-    return
-  }
-  const messageForksHash = currentSession.messageForksHash
-
-  const updateFn = (data: Message[]): { data: Message[]; updated: boolean } => {
-    const forkMessageIndex = data.findIndex((m) => m.id === forkMessageId)
-    if (forkMessageIndex < 0) {
-      return { data, updated: false } // 只有找不到消息才返回 false
+export async function deleteFork(sessionId: string, forkMessageId: string) {
+  await chatStore.updateSessionWithMessages(sessionId, (session) => {
+    if (!session) {
+      throw new Error('Session not found')
     }
-    const forks = messageForksHash[forkMessageId]
-    if (!forks) {
-      return { data, updated: true }
+    const patch = buildDeleteForkPatch(session, forkMessageId)
+    if (!patch) {
+      return session
     }
-    // 删除消息列表中当前分叉的消息
-    data = data.slice(0, forkMessageIndex + 1)
-    // 清理当前分叉
-    forks.lists = [...forks.lists.slice(0, forks.position), ...forks.lists.slice(forks.position + 1)]
-    forks.position = Math.min(forks.position, forks.lists.length - 1)
-    // 如果当前消息已经没有分支，则删除整个消息分叉信息
-    if (forks.lists.length === 0) {
-      delete messageForksHash[forkMessageId]
-      return { data, updated: true }
+    return {
+      ...session,
+      ...patch,
     }
-    // 将当前游标位置的消息添加到主消息列表中
-    data = data.concat(forks.lists[forks.position].messages)
-    forks.lists[forks.position].messages = []
-    messageForksHash[forkMessageId] = forks
-    return { data, updated: true }
-  }
-
-  // 更新当前消息列表，如果没有找到消息则自动更新线程消息列表
-  const { data, updated } = updateFn(currentSession.messages)
-  if (updated) {
-    saveSession({
-      id: currentSession.id,
-      messages: data,
-      messageForksHash,
-    })
-    return
-  }
-  for (let i = (currentSession.threads || []).length - 1; i >= 0; i--) {
-    const thread = (currentSession.threads || [])[i]
-    const { data, updated } = updateFn(thread.messages)
-    if (updated) {
-      saveSession({
-        id: currentSession.id,
-        threads: currentSession.threads?.map((t) => (t.id === thread.id ? { ...t, messages: data } : t)),
-        messageForksHash,
-      })
-      return
-    }
-  }
+  })
 }
 
 /**
  * 将某条消息所有的分叉消息全部展开到当前消息列表中
- * @param forkMessageId 消息ID
+ * @deprecated
  */
-export async function expandFork(forkMessageId: string) {
-  const store = getDefaultStore()
-  const currentSession = store.get(atoms.currentSessionAtom)
-  if (!currentSession || !currentSession.messageForksHash) {
-    return
-  }
-  const messageForksHash = currentSession.messageForksHash
-
-  const updateFn = (data: Message[]): { data: Message[]; updated: boolean } => {
-    const forkMessageIndex = data.findIndex((m) => m.id === forkMessageId)
-    if (forkMessageIndex < 0) {
-      return { data, updated: false } // 只有找不到消息才返回 false
+export async function expandFork(sessionId: string, forkMessageId: string) {
+  await chatStore.updateSessionWithMessages(sessionId, (session) => {
+    if (!session) {
+      throw new Error('Session not found')
     }
-    const forks = messageForksHash[forkMessageId]
-    if (!forks) {
-      return { data, updated: true }
+    const patch = buildExpandForkPatch(session, forkMessageId)
+    if (!patch) {
+      return session
     }
-    // 将当前消息的所有分叉消息添加到主消息列表中
-    for (const list of forks.lists) {
-      data = data.concat(list.messages)
+    return {
+      ...session,
+      ...patch,
     }
-    // 删除当前消息的所有分叉
-    delete messageForksHash[forkMessageId]
-    return { data, updated: true }
-  }
-
-  // 更新当前消息列表，如果没有找到消息则自动更新线程消息列表
-  const { data, updated } = updateFn(currentSession.messages)
-  if (updated) {
-    saveSession({
-      id: currentSession.id,
-      messages: data,
-      messageForksHash,
-    })
-    return
-  }
-  for (let i = (currentSession.threads || []).length - 1; i >= 0; i--) {
-    const thread = (currentSession.threads || [])[i]
-    const { data, updated } = updateFn(thread.messages)
-    if (updated) {
-      saveSession({
-        id: currentSession.id,
-        threads: currentSession.threads?.map((t) => (t.id === thread.id ? { ...t, messages: data } : t)),
-        messageForksHash,
-      })
-      return
-    }
-  }
+  })
 }

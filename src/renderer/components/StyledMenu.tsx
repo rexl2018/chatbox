@@ -1,11 +1,10 @@
-import { Menu, MenuProps } from '@mui/material'
+import { Menu, type MenuProps } from '@mui/material'
 import 'katex/dist/katex.min.css'
-import { styled, alpha } from '@mui/material/styles'
-import { useAtomValue } from 'jotai'
-import * as atoms from '@/stores/atoms'
+import { alpha, styled } from '@mui/material/styles'
+import { useLanguage } from '@/stores/settingsStore'
 
 const StyledMenu = styled((props: MenuProps) => {
-  const language = useAtomValue(atoms.languageAtom)
+  const language = useLanguage()
   return (
     <Menu
       dir={language === 'ar' ? 'rtl' : 'ltr'}

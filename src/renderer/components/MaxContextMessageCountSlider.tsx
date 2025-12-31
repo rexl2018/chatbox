@@ -2,6 +2,7 @@ import { Flex, Slider, Stack, type StackProps, Text, TextInput, type TextProps, 
 import { IconInfoCircle } from '@tabler/icons-react'
 import { type ChangeEvent, type KeyboardEvent, useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { ScalableIcon } from './ScalableIcon'
 
 export function toBeRemoved_getContextMessageCount(
   openaiMaxContextMessageCount: number,
@@ -98,7 +99,7 @@ export default function MaxContextMessageCountSlider({ value, onChange, classNam
           zIndex={3000}
           events={{ hover: true, focus: true, touch: true }}
         >
-          <IconInfoCircle size={20} className="text-[var(--mantine-color-chatbox-tertiary-text)]" />
+          <ScalableIcon icon={IconInfoCircle} size={20} className="text-chatbox-tint-tertiary" />
         </Tooltip>
       </Flex>
       <Flex gap="sm" align="center" className={className}>

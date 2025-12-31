@@ -21,6 +21,8 @@ const dependencies = packageJson.dependencies || {};
 checkNodeEnv('development');
 
 const EXCLUDE_MODULES = new Set([
+  '@capacitor/android', // native platform package, not a JS runtime module
+  '@capacitor/ios', // native platform package, not a JS runtime module
   '@modelcontextprotocol/sdk', // avoid `Package path . is not exported from package` error
   '@mastra/core',
   '@mastra/rag',

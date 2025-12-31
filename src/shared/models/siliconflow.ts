@@ -1,4 +1,3 @@
-import type { ProviderModelInfo } from '../types'
 import type { ModelDependencies } from '../types/adapters'
 import OpenAICompatible, { type OpenAICompatibleSettings } from './openai-compatible'
 
@@ -16,7 +15,7 @@ export default class SiliconFlow extends OpenAICompatible {
         model: options.model,
         temperature: options.temperature,
         topP: options.topP,
-        maxTokens: options.maxTokens,
+        maxOutputTokens: options.maxOutputTokens,
         stream: options.stream,
       },
       dependencies
@@ -28,7 +27,8 @@ export default class SiliconFlow extends OpenAICompatible {
   }
 
   isSupportToolUse(scope?: 'web-browsing') {
-    if (scope === 'web-browsing' && this.options.model.modelId.includes('deepseek')) {
+    // v3和r1模型的function能力较差，v3.1可以开启
+    if (scope === 'web-browsing' && /deepseek-(v3|r1)$/.test(this.options.model.modelId.toLowerCase())) {
       return false
     }
     return super.isSupportToolUse()

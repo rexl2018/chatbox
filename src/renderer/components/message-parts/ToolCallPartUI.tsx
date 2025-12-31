@@ -1,9 +1,8 @@
-import { ActionIcon, alpha, Box, Code, Group, Paper, SimpleGrid, Space, Stack, Text, Transition } from '@mantine/core'
+import { ActionIcon, alpha, Box, Code, Collapse, Group, Paper, SimpleGrid, Space, Stack, Text } from '@mantine/core'
 import {
   IconArrowRight,
   IconBulb,
   IconChevronRight,
-  IconChevronUp,
   IconCircleCheckFilled,
   IconCircleXFilled,
   IconCode,
@@ -11,14 +10,21 @@ import {
   IconLoader,
   IconTool,
 } from '@tabler/icons-react'
-import { Link } from '@tanstack/react-router'
+import clsx from 'clsx'
 import { type FC, type ReactNode, useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { Message, MessageReasoningPart, MessageToolCallPart } from 'src/shared/types'
+import {
+  type Message,
+  type MessageReasoningPart,
+  type MessageToolCallPart,
+  MessageToolCallPartSchema,
+} from 'src/shared/types'
+import z from 'zod'
+import { formatElapsedTime, useThinkingTimer } from '@/hooks/useThinkingTimer'
 import { cn } from '@/lib/utils'
 import { getToolName } from '@/packages/tools'
 import type { SearchResultItem } from '@/packages/web-search'
-import { useThinkingTimer, formatElapsedTime } from '@/hooks/useThinkingTimer'
+import { ScalableIcon } from '../ScalableIcon'
 
 const ToolCallHeader: FC<{ part: MessageToolCallPart; action: ReactNode; onClick: () => void }> = (props) => {
   return (
@@ -26,13 +32,13 @@ const ToolCallHeader: FC<{ part: MessageToolCallPart; action: ReactNode; onClick
       <Group justify="space-between" className="w-full">
         <Group gap="xs">
           <Text fw={600}>{getToolName(props.part.toolName)}</Text>
-          <IconTool size={16} color="var(--mantine-color-chatbox-success-text)" />
+          <ScalableIcon icon={IconTool} color="var(--chatbox-tint-success)" />
           {props.part.state === 'call' ? (
-            <IconLoader size={16} className="animate-spin" color="var(--mantine-color-chatbox-brand-text)" />
+            <ScalableIcon icon={IconLoader} className="animate-spin" color="var(--chatbox-tint-brand)" />
           ) : props.part.state === 'error' ? (
-            <IconCircleXFilled size={16} color="var(--mantine-color-chatbox-error-text)" />
+            <ScalableIcon icon={IconCircleXFilled} color="var(--chatbox-tint-error)" />
           ) : (
-            <IconCircleCheckFilled size={16} color="var(--mantine-color-chatbox-success-text)" />
+            <ScalableIcon icon={IconCircleCheckFilled} color="var(--chatbox-tint-success)" />
           )}
         </Group>
         <Space miw="xl" />
@@ -42,23 +48,72 @@ const ToolCallHeader: FC<{ part: MessageToolCallPart; action: ReactNode; onClick
   )
 }
 
+const WebBrowsingToolCallPartSchema = MessageToolCallPartSchema.extend({
+  toolName: z.literal('web_search'),
+  args: z.object({
+    query: z.string(),
+  }),
+  result: z
+    .object({
+      query: z.string(),
+      searchResults: z.array(
+        z.object({
+          title: z.string(),
+          snippet: z.string(),
+          link: z.string(),
+        })
+      ),
+    })
+    .optional(),
+})
+
 type WebBrowsingToolCallPart = MessageToolCallPart<
   { query: string },
   { query: string; searchResults: SearchResultItem[] }
 >
 
+const getSafeExternalHref = (raw: string): string | null => {
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+
+  if (!/^https?:\/\//i.test(trimmed)) {
+    return null
+  }
+
+  try {
+    return new URL(trimmed).toString()
+  } catch (_error) {
+    const encoded = trimmed.replace(/%(?![0-9A-Fa-f]{2})/g, '%25')
+    try {
+      return new URL(encoded).toString()
+    } catch (_innerError) {
+      return null
+    }
+  }
+}
+
 const SearchResultCard: FC<{ index: number; result: SearchResultItem }> = ({ index, result }) => {
+  const href = getSafeExternalHref(result.link)
+
+  const content = (
+    <Paper radius="md" p={8} bg={'var(--chatbox-background-gray-secondary)'} maw={200} title={result.title}>
+      <Text size="sm" truncate="end" m={0}>
+        <b>{index + 1}.</b> {result.title}
+      </Text>
+      <Text size="xs" truncate="end" c="chatbox-tertiary" m={0} mt={4}>
+        {result.link}
+      </Text>
+    </Paper>
+  )
+
+  if (!href) {
+    return content
+  }
+
   return (
-    <Link to={result.link} target="_blank" className="no-underline">
-      <Paper radius="md" p={8} bg={alpha('var(--mantine-color-gray-6)', 0.1)} maw={200} title={result.title}>
-        <Text size="sm" truncate="end" m={0}>
-          <b>{index + 1}.</b> {result.title}
-        </Text>
-        <Text size="xs" truncate="end" c="chatbox-tertiary" m={0} mt={4}>
-          {result.link}
-        </Text>
-      </Paper>
-    </Link>
+    <Box component="a" href={href} target="_blank" rel="noopener noreferrer" className="no-underline">
+      {content}
+    </Box>
   )
 }
 
@@ -70,36 +125,38 @@ const WebSearchToolCallUI: FC<{ part: WebBrowsingToolCallPart }> = ({ part }) =>
       <ToolCallHeader
         part={part}
         onClick={() => setExpand((prev) => !prev)}
-        action={expaned ? <IconChevronUp size={16} /> : <IconChevronRight size={16} />}
+        action={
+          <ScalableIcon icon={IconChevronRight} className={clsx('transition-transform', expaned ? 'rotate-90' : '')} />
+        }
       />
-      <Transition transition="fade-down" duration={100} mounted={expaned}>
-        {(transitionStyle) => (
-          <Stack gap="xs" style={{ ...transitionStyle, zIndex: 1 }}>
-            <Group gap="xs" my={2}>
-              <Text c="chatbox-tertiary" m={0}>
-                {t('Search query')}:
-              </Text>
-              <Text fw={600} size="sm" m={0} fs="italic">
-                {part.args.query}
-              </Text>
-            </Group>
-            {part.result && (
-              <SimpleGrid cols={{ sm: 3, md: 4 }} spacing="xs">
-                {part.result.searchResults.map((result, index) => (
-                  <SearchResultCard key={result.link} index={index} result={result} />
-                ))}
-              </SimpleGrid>
-            )}
-          </Stack>
+      <Collapse in={expaned}>
+        <Stack gap="xs">
+          <Group gap="xs" my={2}>
+            <Text c="chatbox-tertiary" m={0}>
+              {t('Search query')}:
+            </Text>
+            <Text fw={600} size="sm" m={0} fs="italic">
+              {part.args.query}
+            </Text>
+          </Group>
+          {part.result && (
+            <SimpleGrid cols={{ sm: 3, md: 4 }} spacing="xs">
+              {part.result.searchResults.map((result, index) => (
+                <SearchResultCard key={result.link} index={index} result={result} />
+              ))}
+            </SimpleGrid>
+          )}
+        </Stack>
+      </Collapse>
+      <Collapse in={!expaned}>
+        {part.result && (
+          <Group gap="xs" wrap="nowrap" className="overflow-x-auto" pb="xs">
+            {part.result.searchResults.map((result, index) => (
+              <SearchResultCard key={result.link} index={index} result={result} />
+            ))}
+          </Group>
         )}
-      </Transition>
-      {!expaned && part.result && (
-        <Group gap="xs" wrap="nowrap" className="overflow-x-auto" pb="xs">
-          {part.result.searchResults.map((result, index) => (
-            <SearchResultCard key={result.link} index={index} result={result} />
-          ))}
-        </Group>
-      )}
+      </Collapse>
     </Stack>
   )
 }
@@ -112,46 +169,49 @@ const GeneralToolCallUI: FC<{ part: MessageToolCallPart }> = ({ part }) => {
       <ToolCallHeader
         part={part}
         onClick={() => setExpand((prev) => !prev)}
-        action={expaned ? <IconChevronUp size={16} /> : <IconChevronRight size={16} />}
+        action={
+          <ScalableIcon icon={IconChevronRight} className={clsx('transition-transform', expaned ? 'rotate-90' : '')} />
+        }
       />
 
-      <Transition transition="fade-down" duration={100} mounted={expaned}>
-        {(transitionStyle) => (
-          <Paper withBorder radius="md" p="sm" style={{ ...transitionStyle, zIndex: 1 }}>
-            <Stack gap="xs">
+      <Collapse in={expaned}>
+        <Paper withBorder radius="md" p="sm">
+          <Stack gap="xs">
+            <Group gap="xs" c="chatbox-tertiary">
+              <ScalableIcon icon={IconCode} />
+              <Text fw={600} size="xs" c="chatbox-tertiary" m="0">
+                {t('Arguments')}
+              </Text>
+            </Group>
+            <Box>
+              <Code block>{JSON.stringify(part.args, null, 2)}</Code>
+            </Box>
+          </Stack>
+          {!!part.result && (
+            <Stack gap="xs" className="mt-2">
               <Group gap="xs" c="chatbox-tertiary">
-                <IconCode size={16} />
+                <ScalableIcon icon={IconArrowRight} />
                 <Text fw={600} size="xs" c="chatbox-tertiary" m="0">
-                  {t('Arguments')}
+                  {t('Result')}
                 </Text>
               </Group>
               <Box>
-                <Code block>{JSON.stringify(part.args, null, 2)}</Code>
+                <Code block>{JSON.stringify(part.result, null, 2)}</Code>
               </Box>
             </Stack>
-            {!!part.result && (
-              <Stack gap="xs" className="mt-2">
-                <Group gap="xs" c="chatbox-tertiary">
-                  <IconArrowRight size={16} />
-                  <Text fw={600} size="xs" c="chatbox-tertiary" m="0">
-                    {t('Result')}
-                  </Text>
-                </Group>
-                <Box>
-                  <Code block>{JSON.stringify(part.result, null, 2)}</Code>
-                </Box>
-              </Stack>
-            )}
-          </Paper>
-        )}
-      </Transition>
+          )}
+        </Paper>
+      </Collapse>
     </Stack>
   )
 }
 
 export const ToolCallPartUI: FC<{ part: MessageToolCallPart }> = ({ part }) => {
   if (part.toolName === 'web_search') {
-    return <WebSearchToolCallUI part={part as WebBrowsingToolCallPart} />
+    const parsedPart = WebBrowsingToolCallPartSchema.safeParse(part)
+    if (parsedPart.success) {
+      return <WebSearchToolCallUI part={parsedPart.data as WebBrowsingToolCallPart} />
+    }
   }
   return <GeneralToolCallUI part={part} />
 }
@@ -184,11 +244,8 @@ export const ReasoningContentUI: FC<{
   // 2. If actively thinking and we have elapsed time, show real-time updates
   // 3. Otherwise show 0 (fallback for edge cases)
   // This ensures the timer stops immediately when thinking ends and persists the final duration
-  const displayTime = part?.duration && part.duration > 0
-    ? part.duration
-    : isThinking && elapsedTime > 0
-      ? elapsedTime
-      : 0
+  const displayTime =
+    part?.duration && part.duration > 0 ? part.duration : isThinking && elapsedTime > 0 ? elapsedTime : 0
 
   const toggleExpanded = useCallback(() => {
     setIsExpanded((prev) => !prev)
@@ -199,7 +256,7 @@ export const ReasoningContentUI: FC<{
       <Box onClick={toggleExpanded} className="cursor-pointer group">
         <Group px="xs" justify="space-between" className="w-full">
           <Group gap="xs" className={cn(isThinking ? 'animate-pulse' : '')}>
-            <IconBulb size={16} color="var(--mantine-color-chatbox-warning-text)" />
+            <ScalableIcon icon={IconBulb} color="var(--chatbox-tint-warning)" />
             <Text fw={600} size="sm">
               {isThinking ? t('Thinking') : t('Deeply thought')}
             </Text>
@@ -221,28 +278,28 @@ export const ReasoningContentUI: FC<{
               }}
               aria-label={t('Copy reasoning content')}
             >
-              <IconCopy size={16} />
+              <ScalableIcon icon={IconCopy} />
             </ActionIcon>
 
-            {isExpanded ? <IconChevronUp size={16} /> : <IconChevronRight size={16} />}
+            <ScalableIcon
+              icon={IconChevronRight}
+              className={clsx('transition-transform', isExpanded ? 'rotate-90' : '')}
+            />
           </Group>
         </Group>
       </Box>
 
-      <Transition transition="fade-down" duration={100} mounted={isExpanded}>
-        {(transitionStyle) => (
-          <Box
-            style={{
-              ...transitionStyle,
-              borderTop: '1px solid var(--paper-border-color)',
-            }}
-          >
-            <Text size="sm" px={'sm'} style={{ whiteSpace: 'pre-line', lineHeight: 1.5 }}>
-              {reasoningContent}
-            </Text>
-          </Box>
-        )}
-      </Transition>
+      <Collapse in={isExpanded}>
+        <Box
+          style={{
+            borderTop: '1px solid var(--paper-border-color)',
+          }}
+        >
+          <Text size="sm" px={'sm'} style={{ whiteSpace: 'pre-line', lineHeight: 1.5 }}>
+            {reasoningContent}
+          </Text>
+        </Box>
+      </Collapse>
     </Paper>
   )
 }

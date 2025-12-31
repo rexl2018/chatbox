@@ -1,4 +1,4 @@
-import { Box, Button, Flex, Modal, ScrollArea, Stack, Text, TextInput } from '@mantine/core'
+import { Box, Button, Flex, ScrollArea, Stack, Text, TextInput } from '@mantine/core'
 import { IconAlertTriangle } from '@tabler/icons-react'
 import { useNavigate } from '@tanstack/react-router'
 import { useCallback } from 'react'
@@ -6,7 +6,9 @@ import { useTranslation } from 'react-i18next'
 import type { CustomProviderBaseInfo, ModelProviderEnum, ProviderInfo, ProviderSettings } from 'src/shared/types'
 import { ModelProviderType } from 'src/shared/types'
 import { ModelList } from '@/components/ModelList'
-import { useSettings } from '@/hooks/useSettings'
+import { Modal } from '@/components/Overlay'
+import { ScalableIcon } from '@/components/ScalableIcon'
+import { useSettingsStore } from '@/stores/settingsStore'
 import { add as addToast } from '@/stores/toastActions'
 
 interface ImportProviderModalProps {
@@ -22,9 +24,9 @@ const readOnlyInputStyles = {
     fontWeight: 'normal',
   },
   input: {
-    backgroundColor: 'var(--mantine-color-chatbox-background-secondary-text)',
+    backgroundColor: 'var(--chatbox-background-secondary)',
     border: 'none',
-    color: 'var(--mantine-color-chatbox-primary-text)',
+    color: 'var(--chatbox-tint-primary)',
     cursor: 'default',
   },
 }
@@ -38,7 +40,9 @@ const ReadOnlyInput = ({ label, value, ...props }: { label: string; value: strin
 export function ImportProviderModal({ opened, onClose, importedConfig, existingProvider }: ImportProviderModalProps) {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const { settings, setSettings } = useSettings()
+  const setSettings = useSettingsStore((s) => s.setSettings)
+  const providers = useSettingsStore((s) => s.providers)
+  const customProviders = useSettingsStore((s) => s.customProviders)
 
   // Derive form values from props directly
   const providerName =
@@ -50,6 +54,10 @@ export function ImportProviderModal({ opened, onClose, importedConfig, existingP
   const apiPath = importedConfig?.apiPath || ''
   const apiKey = importedConfig?.apiKey || ''
   const urls = importedConfig && 'urls' in importedConfig ? importedConfig?.urls : existingProvider?.urls || {}
+  const providerType =
+    (importedConfig && 'type' in importedConfig ? importedConfig.type : undefined) ||
+    (existingProvider && 'type' in existingProvider ? existingProvider.type : undefined) ||
+    ModelProviderType.OpenAI
 
   // Filter out duplicate model IDs, fallback to existing provider models
   const allModels = importedConfig?.models || existingProvider?.models || []
@@ -61,7 +69,7 @@ export function ImportProviderModal({ opened, onClose, importedConfig, existingP
     // 如果有 existing provider， 可能是 built-in 也可能是 custom provider，如果没有，一定是 custom provider
 
     const providerSettings = {
-      ...settings.providers?.[providerId],
+      ...providers?.[providerId],
       ...{
         apiHost,
         apiPath,
@@ -73,7 +81,7 @@ export function ImportProviderModal({ opened, onClose, importedConfig, existingP
       // import for built-in provder，only import provider settings
       const updatedSettings = {
         providers: {
-          ...settings.providers,
+          ...providers,
           [providerId]: providerSettings,
         },
       }
@@ -83,7 +91,7 @@ export function ImportProviderModal({ opened, onClose, importedConfig, existingP
       const baseProviderInfo: CustomProviderBaseInfo = {
         id: providerId,
         name: providerName,
-        type: ModelProviderType.OpenAI,
+        type: providerType,
         iconUrl: importedConfig && 'iconUrl' in importedConfig ? importedConfig?.iconUrl : undefined,
         urls,
         isCustom: true,
@@ -91,10 +99,10 @@ export function ImportProviderModal({ opened, onClose, importedConfig, existingP
       const updatedSettings = {
         // replace or insert custom provider info
         customProviders: existingProvider
-          ? (settings.customProviders || []).map((p) => (p.id === providerId ? { ...p, ...baseProviderInfo } : p))
-          : [...(settings.customProviders || []), baseProviderInfo],
+          ? (customProviders || []).map((p) => (p.id === providerId ? { ...p, ...baseProviderInfo } : p))
+          : [...(customProviders || []), baseProviderInfo],
         providers: {
-          ...settings.providers,
+          ...providers,
           [providerId]: providerSettings,
         },
       }
@@ -116,12 +124,14 @@ export function ImportProviderModal({ opened, onClose, importedConfig, existingP
     urls,
     uniqueModels,
     existingProvider,
-    settings,
+    providers,
+    customProviders,
     setSettings,
     navigate,
     t,
     onClose,
     importedConfig,
+    providerType,
   ])
 
   return (
@@ -152,11 +162,11 @@ export function ImportProviderModal({ opened, onClose, importedConfig, existingP
             gap="xs"
             p="sm"
             style={{
-              backgroundColor: 'var(--mantine-color-chatbox-background-error-secondary-5)',
+              backgroundColor: 'var(--chatbox-background-error-secondary)',
               borderRadius: '8px',
             }}
           >
-            <IconAlertTriangle size={16} color="var(--mantine-color-chatbox-error-5)" />
+            <ScalableIcon icon={IconAlertTriangle} color="var(--chatbox-tint-error)" />
             <Box flex={1}>
               <Text size="sm" fw={600} c="chatbox-error">
                 {t('Provider already exists')}

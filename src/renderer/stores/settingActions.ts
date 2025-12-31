@@ -1,18 +1,10 @@
 import { getDefaultStore } from 'jotai'
-import { ModelProvider, ModelProviderEnum, Settings } from '../../shared/types'
+import { ModelProviderEnum } from 'src/shared/types'
 import * as atoms from './atoms'
-
-export function modify(update: Partial<Settings>) {
-  const store = getDefaultStore()
-  store.set(atoms.settingsAtom, (settings) => ({
-    ...settings,
-    ...update,
-  }))
-}
+import { settingsStore } from './settingsStore'
 
 export function needEditSetting() {
-  const store = getDefaultStore()
-  const settings = store.get(atoms.settingsAtom)
+  const settings = settingsStore.getState()
 
   // 激活了chatbox ai
   if (settings.licenseKey) {
@@ -30,7 +22,9 @@ export function needEditSetting() {
     if (
       keys.filter(
         (key) =>
-          (key === ModelProviderEnum.Ollama || key === ModelProviderEnum.LMStudio || key.startsWith('custom-provider')) &&
+          (key === ModelProviderEnum.Ollama ||
+            key === ModelProviderEnum.LMStudio ||
+            key.startsWith('custom-provider')) &&
           providers[key].models?.length
       ).length > 0
     ) {
@@ -41,21 +35,27 @@ export function needEditSetting() {
 }
 
 export function getLanguage() {
-  const store = getDefaultStore()
-  const settings = store.get(atoms.settingsAtom)
-  return settings.language
+  return settingsStore.getState().language
 }
 
 export function getProxy() {
-  const store = getDefaultStore()
-  const settings = store.get(atoms.settingsAtom)
-  return settings.proxy
+  return settingsStore.getState().proxy
 }
 
 export function getLicenseKey() {
-  const store = getDefaultStore()
-  const settings = store.get(atoms.settingsAtom)
-  return settings.licenseKey
+  return settingsStore.getState().licenseKey
+}
+
+export function getLicenseDetail() {
+  return settingsStore.getState().licenseDetail
+}
+
+export function isPaid() {
+  return !!getLicenseKey()
+}
+
+export function isPro() {
+  return !!getLicenseKey() && !getLicenseDetail()?.name.toLowerCase().includes('lite')
 }
 
 export function getRemoteConfig() {
@@ -63,45 +63,10 @@ export function getRemoteConfig() {
   return store.get(atoms.remoteConfigAtom)
 }
 
-export function getSettings() {
-  const store = getDefaultStore()
-  return store.get(atoms.settingsAtom)
-}
-
 export function getAutoGenerateTitle() {
-  const store = getDefaultStore()
-  return store.get(atoms.autoGenerateTitleAtom)
-}
-
-export function setModelProvider(provider: ModelProvider) {
-  const store = getDefaultStore()
-  store.set(atoms.settingsAtom, (settings) => ({
-    ...settings,
-    aiProvider: provider,
-  }))
+  return settingsStore.getState().autoGenerateTitle
 }
 
 export function getExtensionSettings() {
-  const store = getDefaultStore()
-  return store.get(atoms.settingsAtom).extension
-}
-
-export function createCustomProvider() {
-  // TODO: Uncomment and implement this function
-  // const newCustomProvider: CustomProvider = {
-  //   id: `custom-provider-${Date.now()}`,
-  //   name: 'Untitled',
-  //   api: 'openai',
-  //   host: 'https://api.openai.com/v1',
-  //   path: '/chat/completions',
-  //   key: '',
-  //   model: 'gpt-4o',
-  // }
-  // const store = getDefaultStore()
-  // store.set(atoms.settingsAtom, (settings) => ({
-  //   ...settings,
-  //   aiProvider: ModelProviderEnum.Custom,
-  //   selectedCustomProviderId: newCustomProvider.id,
-  //   customProviders: [newCustomProvider, ...settings.customProviders],
-  // }))
+  return settingsStore.getState().extension
 }

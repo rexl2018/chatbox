@@ -1,13 +1,18 @@
 import { createHashHistory, createRouter, useNavigate } from '@tanstack/react-router'
-import { routeTree } from './routeTree.gen'
+import { useEffect } from 'react'
 import platform from './platform'
+import { routeTree } from './routeTree.gen'
 
 // Create a new router instance
 export const router = createRouter({
   routeTree,
   defaultNotFoundComponent: () => {
     const navigate = useNavigate()
-    navigate({ to: '/', replace: true }) // 重定向到首页
+
+    useEffect(() => {
+      navigate({ to: '/', replace: true }) // 重定向到首页
+    }, [navigate])
+
     return null
   },
   history: platform.type === 'web' ? undefined : createHashHistory(),

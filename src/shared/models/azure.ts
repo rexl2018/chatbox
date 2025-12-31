@@ -15,7 +15,7 @@ interface Options {
   // openaiMaxTokens: number
   temperature?: number
   topP?: number
-  maxTokens?: number
+  maxOutputTokens?: number
 
   dalleStyle: 'vivid' | 'natural'
   imageGenerateNum: number // 生成图片的数量
@@ -38,8 +38,8 @@ export default class AzureOpenAI extends AbstractAISDKModel {
   protected getProvider() {
     return createAzure({
       apiKey: this.options.azureApikey,
-      apiVersion: this.options.azureApiVersion,
       baseURL: normalizeAzureEndpoint(this.options.azureEndpoint).endpoint,
+      useDeploymentBasedUrls: false,
     })
   }
 
@@ -47,7 +47,7 @@ export default class AzureOpenAI extends AbstractAISDKModel {
     return {
       temperature: this.options.temperature,
       topP: this.options.topP,
-      maxTokens: this.options.maxTokens,
+      maxOutputTokens: this.options.maxOutputTokens,
     }
   }
 

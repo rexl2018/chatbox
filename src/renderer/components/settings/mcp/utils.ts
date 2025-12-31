@@ -1,6 +1,6 @@
 import * as shellQuote from 'shell-quote'
 import { v4 as uuid } from 'uuid'
-import z from 'zod'
+import { z } from 'zod'
 import type { MCPServerConfig } from '@/packages/mcp/types'
 
 const envUtils = {

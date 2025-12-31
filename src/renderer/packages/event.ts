@@ -1,10 +1,8 @@
 import platform from '@/platform'
-import { allowReportingAndTrackingAtom } from '@/stores/atoms'
-import { getDefaultStore } from 'jotai'
+import { settingsStore } from '@/stores/settingsStore'
 
 export function trackingEvent(name: string, params: { [key: string]: string } = {}) {
-  const store = getDefaultStore()
-  const allowReportingAndTracking = store.get(allowReportingAndTrackingAtom)
+  const allowReportingAndTracking = settingsStore.getState().allowReportingAndTracking
   if (!allowReportingAndTracking) {
     return
   }

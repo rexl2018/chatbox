@@ -1,20 +1,26 @@
 import platform from '@/platform'
-import { USE_LOCAL_API } from '@/variables'
+import { authInfoStore } from '@/stores/authInfoStore'
+import { USE_BETA_API, USE_LOCAL_API } from '@/variables'
 import { ofetch } from 'ofetch'
+import { z } from 'zod'
 import * as cache from 'src/shared/utils/cache'
 import * as chatboxaiAPI from '../../shared/request/chatboxai_pool'
-import { createAfetch, uploadFile } from '../../shared/request/request'
+import { createAfetch, createAuthenticatedAfetch, uploadFile } from '../../shared/request/request'
 import {
   type ChatboxAILicenseDetail,
   type Config,
   type CopilotDetail,
-  type ModelOptionGroup,
   type ModelProvider,
-  ModelProviderEnum,
+  ProviderModelInfoSchema,
   type RemoteConfig,
   type Settings,
 } from '../../shared/types'
 import { getOS } from './navigator'
+
+interface AuthTokens {
+  accessToken: string
+  refreshToken: string
+}
 
 let _afetch: ReturnType<typeof createAfetch> | null = null
 let afetchPromise: Promise<ReturnType<typeof createAfetch>> | null = null
@@ -42,6 +48,48 @@ async function getAfetch() {
   return _afetch
 }
 
+// ========== Authenticated Afetch (带 token 自动刷新) ==========
+
+let _authenticatedAfetch: ReturnType<typeof createAuthenticatedAfetch> | null = null
+let authenticatedAfetchPromise: Promise<ReturnType<typeof createAuthenticatedAfetch>> | null = null
+
+async function initAuthenticatedAfetch(): Promise<ReturnType<typeof createAuthenticatedAfetch>> {
+  if (authenticatedAfetchPromise) return authenticatedAfetchPromise
+
+  authenticatedAfetchPromise = (async () => {
+    _authenticatedAfetch = createAuthenticatedAfetch({
+      platformInfo: {
+        type: platform.type,
+        platform: await platform.getPlatform(),
+        os: getOS(),
+        version: await platform.getVersion(),
+      },
+      getTokens: async () => {
+        const tokens = authInfoStore.getState().getTokens()
+        return tokens
+      },
+      refreshTokens: async (refreshToken: string) => {
+        const result = await refreshAccessToken({ refreshToken })
+        authInfoStore.getState().setTokens(result)
+        return result
+      },
+      clearTokens: async () => {
+        authInfoStore.getState().clearTokens()
+      },
+    })
+    return _authenticatedAfetch
+  })()
+
+  return authenticatedAfetchPromise
+}
+
+async function getAuthenticatedAfetch() {
+  if (!_authenticatedAfetch) {
+    return await initAuthenticatedAfetch()
+  }
+  return _authenticatedAfetch
+}
+
 // ========== API ORIGIN 根据可用性维护 ==========
 
 // const RELEASE_ORIGIN = 'https://releases.chatboxai.app'
@@ -65,7 +113,20 @@ const getChatboxHeaders = async () => {
 // ========== 各个接口方法 ==========
 
 export async function checkNeedUpdate(version: string, os: string, config: Config, settings: Settings) {
-  return Promise.resolve(false)
+  type Response = {
+    need_update?: boolean
+  }
+  // const res = await ofetch<Response>(`${RELEASE_ORIGIN}/chatbox_need_update/${version}`, {
+  const res = await ofetch<Response>(`${getAPIOrigin()}/chatbox_need_update/${version}`, {
+    method: 'POST',
+    retry: 3,
+    body: {
+      uuid: config.uuid,
+      os: os,
+      allowReportingAndTracking: settings.allowReportingAndTracking ? 1 : 0,
+    },
+  })
+  return !!res.need_update
 }
 
 // export async function getSponsorAd(): Promise<null | SponsorAd> {
@@ -99,7 +160,7 @@ export async function listCopilots(lang: string) {
     retry: 3,
     body: { lang },
   })
-  return res['data']
+  return res.data
 }
 
 export async function recordCopilotShare(detail: CopilotDetail) {
@@ -122,7 +183,7 @@ export async function getPremiumPrice() {
   const res = await ofetch<Response>(`${getAPIOrigin()}/api/premium/price`, {
     retry: 3,
   })
-  return res['data']
+  return res.data
 }
 
 export async function getRemoteConfig(config: keyof RemoteConfig) {
@@ -406,50 +467,25 @@ export async function validateLicense(params: { licenseKey: string; instanceId: 
   return json['data']
 }
 
-export async function getModelConfigs(params: { aiProvider: ModelProvider; licenseKey?: string; language?: string }) {
-  type Response = {
-    data: {
-      option_groups: ModelOptionGroup[]
-    }
-  }
-  const afetch = await getAfetch()
-  const res = await afetch(
-    `${getAPIOrigin()}/api/model_configs`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(await getChatboxHeaders()),
-      },
-      body: JSON.stringify({
-        aiProvider: params.aiProvider,
-        licenseKey: params.licenseKey,
-        language: params.language,
-      }),
-    },
-    {
-      parseChatboxRemoteError: true,
-      retry: 2,
-    }
-  )
-  const json: Response = await res.json()
-  return json['data']
-}
+const RemoteModelInfoSchema = z.object({
+  modelId: z.string(),
+  modelName: z.string(),
+  labels: z.array(z.string()).optional(),
+  type: z.enum(['chat', 'embedding', 'rerank']).optional(),
+  apiStyle: z.enum(['google', 'openai', 'anthropic']).optional(),
+  contextWindow: z.number().optional(),
+  capabilities: z.array(z.enum(['vision', 'tool_use', 'reasoning'])).optional(),
+})
+
+const ModelManifestResponseSchema = z.object({
+  success: z.boolean().optional(),
+  data: z.object({
+    groupName: z.string(),
+    models: z.array(RemoteModelInfoSchema),
+  }),
+})
 
 export async function getModelManifest(params: { aiProvider: ModelProvider; licenseKey?: string; language?: string }) {
-  type Response = {
-    data: {
-      groupName: string
-      models: {
-        modelId: string
-        modelName: string
-        labels: string[]
-        type?: 'chat' | 'embedding' | 'rerank'
-        capabilities?: ('vision' | 'tool_use' | 'reasoning')[]
-        apiStyle?: 'google' | 'openai' | 'anthropic'
-      }[]
-    }
-  }
   const afetch = await getAfetch()
   const res = await afetch(
     `${getAPIOrigin()}/api/model_manifest`,
@@ -470,33 +506,12 @@ export async function getModelManifest(params: { aiProvider: ModelProvider; lice
       retry: 2,
     }
   )
-  const json: Response = await res.json()
-  return json['data']
-}
-
-export async function getModelConfigsWithCache(params: {
-  aiProvider: ModelProvider
-  licenseKey?: string
-  language?: string
-}) {
-  if (
-    params.aiProvider === ModelProviderEnum.Custom ||
-    (typeof params.aiProvider === 'string' && params.aiProvider.startsWith('custom-provider'))
-  ) {
-    return { option_groups: [] }
+  const { success, data, error } = ModelManifestResponseSchema.safeParse(await res.json())
+  if (!success) {
+    console.log('getModelManifest error', error)
+    return []
   }
-  type ModelConfig = Awaited<ReturnType<typeof getModelConfigs>>
-  const remoteOptionGroups = await cache.cache<ModelConfig>(
-    `model-options:${params.aiProvider}:${params.licenseKey}:${params.language}`,
-    async () => {
-      return await getModelConfigs(params)
-    },
-    {
-      ttl: USE_LOCAL_API ? 1000 * 5 : 1000 * 60 * 10,
-      refreshFallbackToCache: true,
-    }
-  )
-  return remoteOptionGroups
+  return data.data
 }
 
 export async function reportContent(params: { id: string; type: string; details: string }) {
@@ -509,4 +524,232 @@ export async function reportContent(params: { id: string; type: string; details:
     },
     body: JSON.stringify(params),
   })
+}
+
+const ProviderInfoResponseSchema = z.object({
+  success: z.boolean(),
+  data: z.record(z.string(), ProviderModelInfoSchema.nullable()),
+})
+
+export async function getProviderModelsInfo(params: { modelIds: string[] }) {
+  const afetch = await getAfetch()
+  const res = await afetch(
+    `${getAPIOrigin()}/api/provider_models_info`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(await getChatboxHeaders()),
+      },
+      body: JSON.stringify(params),
+    },
+    {
+      parseChatboxRemoteError: true,
+      retry: 2,
+    }
+  )
+  const json = ProviderInfoResponseSchema.parse(await res.json())
+  return json.data
+}
+
+export async function requestLoginTicketId() {
+  type Response = {
+    data: {
+      ticket_id: string
+    }
+  }
+  const afetch = await getAfetch()
+
+  let deviceType: string
+  if (platform.type === 'mobile') {
+    deviceType = await platform.getPlatform()
+  } else if (platform.type === 'desktop') {
+    const os = getOS()
+    deviceType = os
+  } else {
+    // web 或其他
+    deviceType = platform.type
+  }
+  const appVersion = await platform.getVersion()
+  const deviceName = await platform.getDeviceName()
+
+  const res = await afetch(
+    `https://chatboxai.app/api/auth/request_login_ticket`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(await getChatboxHeaders()),
+      },
+      body: JSON.stringify({
+        device_type: deviceType,
+        app_version: appVersion,
+        device_name: deviceName,
+      }),
+    },
+    {
+      parseChatboxRemoteError: true,
+      retry: 3,
+    }
+  )
+  const json: Response = await res.json()
+  return json.data.ticket_id
+}
+
+export async function checkLoginStatus(ticketId: string) {
+  type Response = {
+    data: {
+      status?: 'success' | 'rejected' | 'pending'
+      access_token?: string
+      refresh_token?: string
+    }
+    success: boolean
+  }
+  const afetch = await getAfetch()
+  const res = await afetch(
+    `https://chatboxai.app/api/auth/login_status`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(await getChatboxHeaders()),
+      },
+      body: JSON.stringify({ ticket_id: ticketId }),
+    },
+    {
+      parseChatboxRemoteError: true,
+      retry: 2,
+    }
+  )
+  const json: Response = await res.json()
+  const responseStatus = json.data.status
+  const accessToken = json.data.access_token || null
+  const refreshToken = json.data.refresh_token || null
+
+  let status: 'pending' | 'success' | 'rejected' = 'pending'
+  if (responseStatus === 'success' && accessToken && refreshToken) {
+    status = 'success'
+  } else if (responseStatus === 'rejected') {
+    status = 'rejected'
+  }
+
+  return {
+    status,
+    accessToken,
+    refreshToken,
+  }
+}
+
+export async function refreshAccessToken(params: { refreshToken: string }) {
+  type Response = {
+    data: {
+      result: string
+    }
+  }
+  const afetch = await getAfetch()
+  const res = await afetch(
+    `https://chatboxai.app/api/auth/token_refresh`,
+    {
+      method: 'POST',
+      headers: {
+        'x-chatbox-refresh-token': params.refreshToken,
+        ...(await getChatboxHeaders()),
+      },
+    },
+    {
+      parseChatboxRemoteError: true,
+      retry: 2,
+    }
+  )
+  const json: Response = await res.json()
+  // console.log('✅ refreshAccessToken response', json)
+
+  const accessToken = res.headers.get('x-chatbox-access-token')
+  const refreshToken = res.headers.get('x-chatbox-refresh-token')
+
+  if (!accessToken || !refreshToken) {
+    console.error('❌ Missing tokens in response headers:', {
+      accessToken: accessToken ? 'present' : 'missing',
+      refreshToken: refreshToken ? 'present' : 'missing',
+    })
+    throw new Error('Failed to refresh token: missing tokens in response headers')
+  }
+
+  return {
+    accessToken,
+    refreshToken,
+  }
+}
+
+export async function getUserProfile() {
+  type Response = {
+    data: {
+      email: string
+      id: string
+      created_at: string
+    }
+  }
+  const afetch = await getAuthenticatedAfetch()
+  const res = await afetch(
+    'https://chatboxai.app/api/user/profile',
+    {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(await getChatboxHeaders()),
+      },
+    },
+    {
+      parseChatboxRemoteError: true,
+      retry: 2,
+    }
+  )
+  const json: Response = await res.json()
+  return json.data
+}
+
+export interface UserLicense {
+  id: number
+  key: string
+  status: string
+  platform: string
+  product_name: string
+  payment_type: string
+  image_usage: number
+  unified_token_usage: number
+  unified_token_limit: number
+  unified_token_usage_details: Array<{
+    type: string
+    token_usage: number
+    token_limit: number
+  }>
+  image_limit: number
+  next_token_refresh_at: string
+  expires_at: string
+  created_at: string
+  recurring_canceled: boolean
+  quota_packs: any[]
+}
+
+export async function listLicensesByUser(): Promise<UserLicense[]> {
+  type Response = {
+    data: UserLicense[]
+  }
+  const afetch = await getAuthenticatedAfetch()
+  const res = await afetch(
+    'https://chatboxai.app/api/license/list_by_user',
+    {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(await getChatboxHeaders()),
+      },
+    },
+    {
+      parseChatboxRemoteError: true,
+      retry: 2,
+    }
+  )
+  const json: Response = await res.json()
+  return json.data
 }

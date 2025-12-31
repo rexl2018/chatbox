@@ -1,18 +1,42 @@
-import { useState } from 'react'
-
+import { atom, useAtomValue } from 'jotai'
+import { debounce } from 'lodash'
 import platform from '@/platform'
-import { useEffect } from 'react'
 
-function useNeedRoomForWinControls() {
-  const [needRoomForMacWindowControls, setNeedRoomForMacWindowControls] = useState(false)
-  const [needRoomForWindowsWindowControls, setNeedRoomForWindowsWindowControls] = useState(false)
-  useEffect(() => {
-    platform.getPlatform().then((platform) => {
-      setNeedRoomForMacWindowControls(platform === 'darwin')
-      setNeedRoomForWindowsWindowControls(platform === 'win32' || platform === 'linux')
-    })
-  }, [])
-  return { needRoomForMacWindowControls, needRoomForWindowsWindowControls }
+export const isFullscreenAtom = atom(false)
+
+isFullscreenAtom.onMount = (set) => {
+  const check = async () => {
+    set(await platform.isFullscreen())
+  }
+  check()
+  const handleResize = debounce(check, 250)
+  window.addEventListener('resize', handleResize)
+  return () => {
+    window.removeEventListener('resize', handleResize)
+    handleResize.cancel?.()
+  }
+}
+
+export const platformTypeAtom = atom('')
+
+platformTypeAtom.onMount = (set) => {
+  platform.getPlatform().then((p) => {
+    set(p)
+  })
+}
+
+const needRoomForWinControlsAtom = atom((get) => {
+  const isFullscreen = get(isFullscreenAtom)
+  const platformType = get(platformTypeAtom)
+
+  return {
+    needRoomForMacWindowControls: platformType === 'darwin' && !isFullscreen,
+    needRoomForWindowsWindowControls: platformType === 'win32' || platformType === 'linux',
+  }
+})
+
+const useNeedRoomForWinControls = () => {
+  return useAtomValue(needRoomForWinControlsAtom)
 }
 
 export default useNeedRoomForWinControls

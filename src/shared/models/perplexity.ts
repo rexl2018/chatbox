@@ -9,7 +9,7 @@ interface Options {
   model: ProviderModelInfo
   temperature?: number
   topP?: number
-  maxTokens?: number
+  maxOutputTokens?: number
   stream?: boolean
 }
 

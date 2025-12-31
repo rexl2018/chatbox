@@ -1,23 +1,24 @@
+import { SplashScreen } from '@capacitor/splash-screen'
 import '@mantine/core/styles.css'
+import '@mantine/spotlight/styles.css'
 import * as Sentry from '@sentry/react'
 import { RouterProvider } from '@tanstack/react-router'
 import { useAtomValue } from 'jotai'
+import 'photoswipe/dist/photoswipe.css'
 import { StrictMode, useState } from 'react'
 import ReactDOM from 'react-dom/client'
 import { ErrorBoundary } from './components/ErrorBoundary'
-import './i18n'
+import i18n from './i18n'
 import { getLogger } from './lib/utils'
+import platform from './platform'
 import reportWebVitals from './reportWebVitals'
 import { router } from './router'
-import { initData } from './setup/init_data'
 import './static/globals.css'
 import './static/index.css'
 import { initLogAtom, migrationProcessAtom } from './stores/atoms/utilAtoms'
 import * as migration from './stores/migration'
+import queryClient from './stores/queryClient'
 import { CHATBOX_BUILD_PLATFORM, CHATBOX_BUILD_TARGET } from './variables'
-import '@mantine/spotlight/styles.css'
-import platform from './platform'
-import { delay } from './utils'
 
 const log = getLogger('index')
 
@@ -35,6 +36,9 @@ import './setup/ga_init'
 
 // 引入保护代码
 import './setup/protect'
+import { QueryClientProvider } from '@tanstack/react-query'
+import { initLastUsedModelStore } from './stores/lastUsedModelStore'
+import { initSettingsStore } from './stores/settingsStore'
 
 // 开发环境下引入错误测试工具
 // if (process.env.NODE_ENV === 'development') {
@@ -56,16 +60,6 @@ async function initializeApp() {
     log.info('migrate done')
   } catch (e) {
     log.error('migrate error', e)
-    Sentry.captureException(e as Error)
-  }
-
-  try {
-    // migration 中没有写入 Demo session了，可以在 migration 之后初始化
-    // 初始化数据
-    await initData()
-    log.info('init data done')
-  } catch (e) {
-    log.error('init data error', e)
     Sentry.captureException(e as Error)
   }
 
@@ -121,6 +115,9 @@ const tid = setTimeout(() => {
       </ErrorBoundary>
     </StrictMode>
   )
+  if (platform.type === 'mobile') {
+    SplashScreen.hide()
+  }
 }, 1000)
 
 // 等待初始化完成后再渲染
@@ -130,36 +127,42 @@ initializeApp()
     Sentry.captureException(e)
     log.error('initializeApp error', e)
   })
-  .finally(() => {
+  .finally(async () => {
     clearTimeout(tid)
 
-    // 等待settings初始化完成，尽量避免闪屏
-    // TODO: 更好的做法是在必要的数据全部初始化完成后再hide splash screen
-    delay(500).then(() => {
-      const el = document.querySelector('.splash-screen')
-      if (platform.type !== 'mobile') {
-        // remove loading page with animation
-        if (el) {
-          el.addEventListener('animationend', () => {
-            el.parentNode?.removeChild(el)
-          })
-          el.classList.add('splash-screen-fade-out')
-        }
-      } else {
-        if (el) {
-          el.parentNode?.removeChild(el)
-        }
-      }
-    })
+    // 等待settings初始化完成，避免闪屏
+    const [settings] = await Promise.all([initSettingsStore(), initLastUsedModelStore()])
 
+    i18n.changeLanguage(settings.language)
     // 初始化完成，可以开始渲染
     ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
       <StrictMode>
         <ErrorBoundary>
-          <RouterProvider router={router} />
+          <QueryClientProvider client={queryClient}>
+            <RouterProvider router={router} />
+          </QueryClientProvider>
         </ErrorBoundary>
       </StrictMode>
     )
+
+    if (platform.type === 'mobile') {
+      SplashScreen.hide()
+    }
+    const el = document.querySelector('.splash-screen')
+    if (el) {
+      el.addEventListener('animationend', () => {
+        el.parentNode?.removeChild(el)
+      })
+      el.classList.add('splash-screen-fade-out')
+    }
+
+    if (window?.navigator?.storage) {
+      navigator.storage?.persisted().then((persisted) => {
+        if (!persisted) {
+          navigator.storage?.persist()
+        }
+      })
+    }
   })
 
 // If you want to start measuring performance in your app, pass a function

@@ -1,36 +1,31 @@
 import NiceModal from '@ebay/nice-modal-react'
-import EditIcon from '@mui/icons-material/Edit'
-import ImageIcon from '@mui/icons-material/Image'
-import { Box, Chip, IconButton, Tooltip, Typography, useTheme } from '@mui/material'
-import { useAtom, useAtomValue } from 'jotai'
-import { PanelRightClose, Settings2 } from 'lucide-react'
+import { ActionIcon, Flex, Title, Tooltip } from '@mantine/core'
+import { IconLayoutSidebarLeftExpand, IconMenu2, IconPencil } from '@tabler/icons-react'
+import clsx from 'clsx'
 import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { cn } from '@/lib/utils'
-import { isChatSession, isPictureSession } from '../../shared/types'
+import { scheduleGenerateNameAndThreadName, scheduleGenerateThreadName } from '@/stores/sessionActions'
+import { useUIStore } from '@/stores/uiStore'
+import type { Session } from '../../shared/types'
 import useNeedRoomForWinControls from '../hooks/useNeedRoomForWinControls'
 import { useIsSmallScreen } from '../hooks/useScreenChange'
-import * as atoms from '../stores/atoms'
-import * as sessionActions from '../stores/sessionActions'
 import * as settingActions from '../stores/settingActions'
-import MiniButton from './MiniButton'
+import { ScalableIcon } from './ScalableIcon'
 import Toolbar from './Toolbar'
+import WindowControls from './WindowControls'
 
-export default function Header() {
+export default function Header(props: { session: Session }) {
   const { t } = useTranslation()
-  const theme = useTheme()
-  const currentSession = useAtomValue(atoms.currentSessionAtom)
-  const [showSidebar, setShowSidebar] = useAtom(atoms.showSidebarAtom)
+  const showSidebar = useUIStore((s) => s.showSidebar)
+  const setShowSidebar = useUIStore((s) => s.setShowSidebar)
 
   const isSmallScreen = useIsSmallScreen()
+  const { needRoomForMacWindowControls } = useNeedRoomForWinControls()
 
-  const { needRoomForMacWindowControls, needRoomForWindowsWindowControls } = useNeedRoomForWinControls()
+  const { session: currentSession } = props
 
   // 会话名称自动生成
   useEffect(() => {
-    if (!currentSession) {
-      return
-    }
     const autoGenerateTitle = settingActions.getAutoGenerateTitle()
     if (!autoGenerateTitle) {
       return
@@ -46,9 +41,9 @@ export default function Header() {
 
     // 触发名称生成（在 sessionActions 中进行去重和延迟处理）
     if (currentSession.name === 'Untitled') {
-      sessionActions.scheduleGenerateNameAndThreadName(currentSession.id)
+      scheduleGenerateNameAndThreadName(currentSession.id)
     } else if (!currentSession.threadName) {
-      sessionActions.scheduleGenerateThreadName(currentSession.id)
+      scheduleGenerateThreadName(currentSession.id)
     }
   }, [currentSession])
 
@@ -59,111 +54,51 @@ export default function Header() {
     NiceModal.show('session-settings', { session: currentSession })
   }
 
-  let EditButton: React.ReactNode | null = null
-  if (currentSession && isChatSession(currentSession) && currentSession.settings) {
-    EditButton = (
-      <Tooltip title={t('Current conversation configured with specific model settings')} className="cursor-pointer">
-        <EditIcon
-          className="ml-1 cursor-pointer w-4 h-4 opacity-30"
-          fontSize="small"
-          style={{ color: theme.palette.warning.main }}
-        />
-      </Tooltip>
-    )
-  } else if (currentSession && isPictureSession(currentSession)) {
-    EditButton = (
-      <Tooltip
-        title={t('The Image Creator plugin has been activated for the current conversation')}
-        className="cursor-pointer"
-      >
-        <Chip
-          className="ml-2 cursor-pointer"
-          variant="outlined"
-          color="secondary"
-          size="small"
-          icon={<ImageIcon className="cursor-pointer" />}
-          label={<span className="cursor-pointer">{t('Image Creator')}</span>}
-        />
-      </Tooltip>
-    )
-  } else {
-    EditButton = <EditIcon className="ml-1 cursor-pointer w-4 h-4 opacity-30" fontSize="small" />
-  }
-
   return (
-    <div
-      className={cn(
-        // 固定高度，和 Windows 的 win controls bar 高度一致
-        'title-bar flex flex-row h-12 items-center',
-        isSmallScreen ? '' : showSidebar ? 'sm:pl-3 sm:pr-2' : 'pr-2',
-        (!showSidebar || isSmallScreen) && needRoomForMacWindowControls ? 'pl-20' : 'pl-3'
-      )}
-      style={{
-        borderBottomWidth: '1px',
-        borderBottomStyle: 'solid',
-        borderBottomColor: theme.palette.divider,
-      }}
+    <Flex
+      h={54}
+      align="center"
+      px="sm"
+      className={clsx('flex-none title-bar border-0 border-b border-solid border-chatbox-border-primary')}
     >
       {(!showSidebar || isSmallScreen) && (
-        <Box className={cn('controls cursor-pointer')} onClick={() => setShowSidebar(!showSidebar)}>
-          <IconButton
-            sx={
-              isSmallScreen
-                ? {
-                    borderColor: theme.palette.action.hover,
-                    borderStyle: 'solid',
-                    borderWidth: 1,
-                  }
-                : {}
-            }
+        <Flex align="center" className={needRoomForMacWindowControls ? 'pl-20' : ''}>
+          <ActionIcon
+            className="controls"
+            variant="subtle"
+            size={isSmallScreen ? 24 : 20}
+            color={isSmallScreen ? 'chatbox-secondary' : 'chatbox-tertiary'}
+            mr="sm"
+            onClick={() => setShowSidebar(!showSidebar)}
           >
-            <PanelRightClose size="20" strokeWidth={1.5} />
-          </IconButton>
-        </Box>
+            {isSmallScreen ? <IconMenu2 /> : <IconLayoutSidebarLeftExpand />}
+          </ActionIcon>
+        </Flex>
       )}
-      <div className={cn('w-full flex flex-row flex-grow pt-2 pb-2')}>
-        <div className="flex flex-row items-center w-0 flex-1 mr-1">
-          <Typography
-            variant="h6"
-            noWrap
-            className={cn(
-              'flex-shrink flex-grow-0 overflow-hidden text-ellipsis whitespace-nowrap',
-              showSidebar ? 'ml-3' : 'ml-1'
-            )}
+
+      <Flex align="center" gap={'xxs'} flex={1} {...(isSmallScreen ? { justify: 'center', pl: 28, pr: 8 } : {})}>
+        <Title order={4} fz={!isSmallScreen ? 20 : undefined} lineClamp={1}>
+          {currentSession?.name}
+        </Title>
+
+        <Tooltip label={t('Customize settings for the current conversation')}>
+          <ActionIcon
+            className="controls"
+            variant="subtle"
+            color="chatbox-tertiary"
+            size={20}
+            onClick={() => {
+              editCurrentSession()
+            }}
           >
-            {currentSession?.name}
-          </Typography>
-          {isSmallScreen ? (
-            <MiniButton
-              className="ml-1 sm:ml-2 controls cursor-pointer"
-              style={{ color: theme.palette.text.secondary }}
-              onClick={() => {
-                editCurrentSession()
-              }}
-              tooltipTitle={
-                <div className="text-center inline-block">
-                  <span>{t('Customize settings for the current conversation')}</span>
-                </div>
-              }
-              tooltipPlacement="top"
-            >
-              <Settings2 size="16" strokeWidth={1} />
-            </MiniButton>
-          ) : (
-            <a
-              onClick={() => {
-                editCurrentSession()
-              }}
-              className="controls flex mr-8 cursor-pointer"
-            >
-              {EditButton}
-            </a>
-          )}
-        </div>
-        <div className={cn('flex-shrink-0', needRoomForWindowsWindowControls ? 'mr-36' : '')}>
-          <Toolbar />
-        </div>
-      </div>
-    </div>
+            <ScalableIcon icon={IconPencil} size={20} />
+          </ActionIcon>
+        </Tooltip>
+      </Flex>
+
+      <Toolbar sessionId={currentSession.id} />
+
+      <WindowControls className="-mr-3 ml-2" />
+    </Flex>
   )
 }

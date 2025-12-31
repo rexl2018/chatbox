@@ -1,11 +1,21 @@
 import { SystemProviders } from '../defaults'
-import { type Config, type ModelProvider, ModelProviderEnum, type Settings, type ProviderModelInfo } from '../types'
+import {
+  type Config,
+  type ModelProvider,
+  ModelProviderEnum,
+  ModelProviderType,
+  type SessionSettings,
+  type Settings,
+} from '../types'
 import type { ModelDependencies } from '../types/adapters'
 import AzureOpenAI from './azure'
 import ChatboxAI from './chatboxai'
 import ChatGLM from './chatglm'
 import Claude from './claude'
+import CustomClaude from './custom-claude'
+import CustomGemini from './custom-gemini'
 import CustomOpenAI from './custom-openai'
+import CustomOpenAIResponses from './custom-openai-responses'
 import DeepSeek from './deepseek'
 import Gemini from './gemini'
 import Groq from './groq'
@@ -13,48 +23,26 @@ import LMStudio from './lmstudio'
 import MistralAI from './mistral-ai'
 import Ollama from './ollama'
 import OpenAI from './openai'
+import OpenRouter from './openrouter'
 import Perplexity from './perplexity'
 import SiliconFlow from './siliconflow'
 import type { ModelInterface } from './types'
 import VolcEngine from './volcengine'
 import XAI from './xai'
 
-// 参数合并逻辑：根据useSessionOverrides决定优先级
-function mergeModelParameters(
-  sessionSettings: Settings,
-  modelInfo: ProviderModelInfo,
-  globalSettings: Settings
-) {
-  const useOverrides = sessionSettings.useSessionOverrides ?? false
-  
-  if (useOverrides) {
-    // Toggle开关Enable: Session > Model > Global
-    return {
-      temperature: sessionSettings.temperature ?? modelInfo.temperature ?? globalSettings.temperature,
-      topP: sessionSettings.topP ?? modelInfo.topP ?? globalSettings.topP,
-      maxTokens: sessionSettings.maxTokens ?? modelInfo.maxTokens ?? (modelInfo.maxOutput || globalSettings.maxTokens) ?? 4095,
-    }
-  } else {
-    // Toggle开关Disable: Model > Global
-    return {
-      temperature: modelInfo.temperature ?? globalSettings.temperature,
-      topP: modelInfo.topP ?? globalSettings.topP,
-      maxTokens: modelInfo.maxTokens ?? (modelInfo.maxOutput || globalSettings.maxTokens) ?? 4095,
-    }
-  }
-}
-
-export function getProviderSettings(setting: Settings) {
+export function getProviderSettings(setting: SessionSettings, globalSettings: Settings) {
   console.debug('getModel', setting.provider, setting.modelId)
   const provider = setting.provider
   if (!provider) {
     throw new Error('Model provider must not be empty.')
   }
-  const providerBaseInfo = [...SystemProviders, ...(setting.customProviders || [])].find((p) => p.id === provider)
+  const providerBaseInfo = [...SystemProviders, ...(globalSettings.customProviders || [])].find(
+    (p) => p.id === provider
+  )
   if (!providerBaseInfo) {
     throw new Error(`Cannot find model with provider: ${setting.provider}`)
   }
-  const providerSetting = setting.providers?.[setting.provider!] || {}
+  const providerSetting = globalSettings.providers?.[provider] || {}
   const formattedApiHost = (providerSetting.apiHost || providerBaseInfo.defaultSettings?.apiHost || '').trim()
   return {
     providerSetting,
@@ -63,44 +51,46 @@ export function getProviderSettings(setting: Settings) {
   }
 }
 
-export function getModel(setting: Settings, config: Config, dependencies: ModelDependencies): ModelInterface {
-  console.debug('getModel', setting.provider, setting.modelId)
-  const provider = setting.provider
+export function getModel(
+  settings: SessionSettings,
+  globalSettings: Settings,
+  config: Config,
+  dependencies: ModelDependencies
+): ModelInterface {
+  console.debug('getModel', settings.provider, settings.modelId)
+  const provider = settings.provider
   if (!provider) {
     throw new Error('Model provider must not be empty.')
   }
-  const { providerSetting, formattedApiHost, providerBaseInfo } = getProviderSettings(setting)
+  const { providerSetting, formattedApiHost, providerBaseInfo } = getProviderSettings(settings, globalSettings)
 
-  let model = providerSetting.models?.find((m) => m.modelId === setting.modelId)
+  let model = providerSetting.models?.find((m) => m.modelId === settings.modelId)
   if (!model) {
     model = SystemProviders.find((p) => p.id === provider)?.defaultSettings?.models?.find(
-      (m) => m.modelId === setting.modelId
+      (m) => m.modelId === settings.modelId
     )
   }
   if (!model) {
     // 如果没有找到对应的 model 配置，直接使用传入的 modelId，这种情况通常发生在用户本地列表中删除了某个 model，但是某个 session 中还在使用，或是检查连接的时候，使用了 defaults 中的 modelId，
     model = {
-      modelId: setting.modelId!,
+      modelId: settings.modelId ?? '',
     }
   }
-
-  // 应用新的参数合并逻辑
-  const mergedParams = mergeModelParameters(setting, model, setting)
 
   switch (provider) {
     case ModelProviderEnum.ChatboxAI:
       return new ChatboxAI(
         {
-          licenseKey: setting.licenseKey,
+          licenseKey: globalSettings.licenseKey,
           model,
-          licenseInstances: setting.licenseInstances,
-          licenseDetail: setting.licenseDetail,
-          language: setting.language,
-          dalleStyle: setting.dalleStyle || 'vivid',
-          temperature: mergedParams.temperature,
-          topP: mergedParams.topP,
-          maxTokens: mergedParams.maxTokens,
-          stream: setting.stream,
+          licenseInstances: globalSettings.licenseInstances,
+          licenseDetail: globalSettings.licenseDetail,
+          language: globalSettings.language,
+          dalleStyle: settings.dalleStyle || 'vivid',
+          temperature: settings.temperature,
+          topP: settings.topP,
+          maxOutputTokens: settings.maxTokens,
+          stream: settings.stream,
         },
         config,
         dependencies
@@ -111,13 +101,13 @@ export function getModel(setting: Settings, config: Config, dependencies: ModelD
           apiKey: providerSetting.apiKey || '',
           apiHost: formattedApiHost,
           model: model,
-          dalleStyle: setting.dalleStyle || 'vivid',
-          temperature: mergedParams.temperature,
-          topP: mergedParams.topP,
-          maxTokens: mergedParams.maxTokens,
-          injectDefaultMetadata: setting.injectDefaultMetadata,
+          dalleStyle: settings.dalleStyle || 'vivid',
+          temperature: settings.temperature,
+          topP: settings.topP,
+          maxOutputTokens: settings.maxTokens,
+          injectDefaultMetadata: globalSettings.injectDefaultMetadata,
           useProxy: false, // 之前的openaiUseProxy已经没有在使用，直接写死false
-          stream: setting.stream,
+          stream: settings.stream,
         },
         dependencies
       )
@@ -130,13 +120,13 @@ export function getModel(setting: Settings, config: Config, dependencies: ModelD
           azureDalleDeploymentName: providerSetting.dalleDeploymentName || '',
           azureApikey: providerSetting.apiKey || '',
           azureApiVersion: providerSetting.apiVersion || providerBaseInfo.defaultSettings?.apiVersion || '',
-          temperature: mergedParams.temperature,
-          topP: mergedParams.topP,
-          maxTokens: mergedParams.maxTokens,
-          dalleStyle: setting.dalleStyle || 'vivid',
-          imageGenerateNum: setting.imageGenerateNum || 1,
-          injectDefaultMetadata: setting.injectDefaultMetadata,
-          stream: setting.stream,
+          temperature: settings.temperature,
+          topP: settings.topP,
+          maxOutputTokens: settings.maxTokens,
+          dalleStyle: settings.dalleStyle || 'vivid',
+          imageGenerateNum: settings.imageGenerateNum || 1,
+          injectDefaultMetadata: globalSettings.injectDefaultMetadata,
+          stream: settings.stream,
         },
         dependencies
       )
@@ -146,10 +136,10 @@ export function getModel(setting: Settings, config: Config, dependencies: ModelD
         {
           apiKey: providerSetting.apiKey || '',
           model,
-          temperature: mergedParams.temperature,
-          topP: mergedParams.topP,
-          maxTokens: mergedParams.maxTokens,
-          stream: setting.stream,
+          temperature: settings.temperature,
+          topP: settings.topP,
+          maxOutputTokens: settings.maxTokens,
+          stream: settings.stream,
         },
         dependencies
       )
@@ -160,10 +150,10 @@ export function getModel(setting: Settings, config: Config, dependencies: ModelD
           claudeApiKey: providerSetting.apiKey || '',
           claudeApiHost: formattedApiHost,
           model,
-          temperature: mergedParams.temperature,
-          topP: mergedParams.topP,
-          maxTokens: mergedParams.maxTokens,
-          stream: setting.stream,
+          temperature: settings.temperature,
+          topP: settings.topP,
+          maxOutputTokens: settings.maxTokens,
+          stream: settings.stream,
         },
         dependencies
       )
@@ -174,10 +164,10 @@ export function getModel(setting: Settings, config: Config, dependencies: ModelD
           geminiAPIKey: providerSetting.apiKey || '',
           geminiAPIHost: formattedApiHost,
           model,
-          temperature: mergedParams.temperature,
-          topP: mergedParams.topP,
-          maxTokens: mergedParams.maxTokens,
-          stream: setting.stream,
+          temperature: settings.temperature,
+          topP: settings.topP,
+          maxOutputTokens: settings.maxTokens,
+          stream: settings.stream,
         },
         dependencies
       )
@@ -187,10 +177,11 @@ export function getModel(setting: Settings, config: Config, dependencies: ModelD
         {
           ollamaHost: formattedApiHost,
           model,
-          temperature: mergedParams.temperature,
-          topP: mergedParams.topP,
-          maxTokens: mergedParams.maxTokens,
-          stream: setting.stream,
+          temperature: settings.temperature,
+          topP: settings.topP,
+          maxOutputTokens: settings.maxTokens,
+          stream: settings.stream,
+          useProxy: providerSetting.useProxy,
         },
         dependencies
       )
@@ -200,10 +191,10 @@ export function getModel(setting: Settings, config: Config, dependencies: ModelD
         {
           apiKey: providerSetting.apiKey || '',
           model,
-          temperature: mergedParams.temperature,
-          topP: mergedParams.topP,
-          maxTokens: mergedParams.maxTokens,
-          stream: setting.stream,
+          temperature: settings.temperature,
+          topP: settings.topP,
+          maxOutputTokens: settings.maxTokens,
+          stream: settings.stream,
         },
         dependencies
       )
@@ -213,10 +204,10 @@ export function getModel(setting: Settings, config: Config, dependencies: ModelD
         {
           apiKey: providerSetting.apiKey || '',
           model,
-          temperature: setting.temperature,
-          topP: setting.topP,
-          maxTokens: setting.maxTokens,
-          stream: setting.stream,
+          temperature: settings.temperature,
+          topP: settings.topP,
+          maxOutputTokens: settings.maxTokens,
+          stream: settings.stream,
         },
         dependencies
       )
@@ -226,10 +217,23 @@ export function getModel(setting: Settings, config: Config, dependencies: ModelD
         {
           apiKey: providerSetting.apiKey || '',
           model,
-          temperature: setting.temperature,
-          topP: setting.topP,
-          maxTokens: setting.maxTokens,
-          stream: setting.stream,
+          temperature: settings.temperature,
+          topP: settings.topP,
+          maxOutputTokens: settings.maxTokens,
+          stream: settings.stream,
+        },
+        dependencies
+      )
+
+    case ModelProviderEnum.OpenRouter:
+      return new OpenRouter(
+        {
+          apiKey: providerSetting.apiKey || '',
+          model,
+          temperature: settings.temperature,
+          topP: settings.topP,
+          maxOutputTokens: settings.maxTokens,
+          stream: settings.stream,
         },
         dependencies
       )
@@ -239,10 +243,10 @@ export function getModel(setting: Settings, config: Config, dependencies: ModelD
         {
           apiKey: providerSetting.apiKey || '',
           model,
-          temperature: setting.temperature,
-          topP: setting.topP,
-          maxTokens: setting.maxTokens,
-          stream: setting.stream,
+          temperature: settings.temperature,
+          topP: settings.topP,
+          maxOutputTokens: settings.maxTokens,
+          stream: settings.stream,
         },
         dependencies
       )
@@ -252,10 +256,10 @@ export function getModel(setting: Settings, config: Config, dependencies: ModelD
         {
           apiKey: providerSetting.apiKey || '',
           model,
-          temperature: setting.temperature,
-          topP: setting.topP,
-          maxTokens: setting.maxTokens,
-          stream: setting.stream,
+          temperature: settings.temperature,
+          topP: settings.topP,
+          maxOutputTokens: settings.maxTokens,
+          stream: settings.stream,
         },
         dependencies
       )
@@ -265,10 +269,10 @@ export function getModel(setting: Settings, config: Config, dependencies: ModelD
         {
           apiHost: formattedApiHost,
           model,
-          temperature: mergedParams.temperature,
-          topP: mergedParams.topP,
-          maxTokens: mergedParams.maxTokens,
-          stream: setting.stream,
+          temperature: settings.temperature,
+          topP: settings.topP,
+          maxOutputTokens: settings.maxTokens,
+          stream: settings.stream,
         },
         dependencies
       )
@@ -278,50 +282,112 @@ export function getModel(setting: Settings, config: Config, dependencies: ModelD
         {
           perplexityApiKey: providerSetting.apiKey || '',
           model,
-          temperature: mergedParams.temperature,
-          topP: mergedParams.topP,
-          maxTokens: mergedParams.maxTokens,
-          stream: setting.stream,
+          temperature: settings.temperature,
+          topP: settings.topP,
+          maxOutputTokens: settings.maxTokens,
+          stream: settings.stream,
         },
         dependencies
       )
 
     case ModelProviderEnum.XAI:
       return new XAI(
-          {
-            apiKey: providerSetting.apiKey || '',
-            model,
-            temperature: mergedParams.temperature,
-            topP: mergedParams.topP,
-            maxTokens: mergedParams.maxTokens,
-            stream: setting.stream,
-          },
-          dependencies
-        )
+        {
+          apiKey: providerSetting.apiKey || '',
+          model,
+          temperature: settings.temperature,
+          topP: settings.topP,
+          maxOutputTokens: settings.maxTokens,
+          stream: settings.stream,
+        },
+        dependencies
+      )
+    case ModelProviderEnum.OpenAIResponses:
+      return new CustomOpenAIResponses(
+        {
+          apiKey: providerSetting.apiKey || '',
+          apiHost: formattedApiHost,
+          apiPath: providerSetting.apiPath || providerBaseInfo.defaultSettings?.apiPath || '',
+          model,
+          temperature: settings.temperature,
+          topP: settings.topP,
+          maxOutputTokens: settings.maxTokens,
+          stream: settings.stream,
+          useProxy: providerSetting.useProxy,
+        },
+        dependencies
+      )
     default:
       if (providerBaseInfo.isCustom) {
-        return new CustomOpenAI(
-          {
-            apiKey: providerSetting.apiKey || '',
-            apiHost: formattedApiHost,
-            apiPath: providerSetting.apiPath || '',
-            model,
-            temperature: mergedParams.temperature,
-            topP: mergedParams.topP,
-            maxTokens: mergedParams.maxTokens,
-            stream: setting.stream,
-            useProxy: providerSetting.useProxy,
-          },
-          dependencies
-        )
+        switch (providerBaseInfo.type) {
+          case ModelProviderType.Claude:
+            return new CustomClaude(
+              {
+                apiKey: providerSetting.apiKey || '',
+                apiHost: formattedApiHost,
+                model,
+                temperature: settings.temperature,
+                topP: settings.topP,
+                maxOutputTokens: settings.maxTokens,
+                stream: settings.stream,
+              },
+              dependencies
+            )
+          case ModelProviderType.Gemini:
+            return new CustomGemini(
+              {
+                apiKey: providerSetting.apiKey || '',
+                apiHost: formattedApiHost,
+                model,
+                temperature: settings.temperature,
+                topP: settings.topP,
+                maxOutputTokens: settings.maxTokens,
+                stream: settings.stream,
+              },
+              dependencies
+            )
+          case ModelProviderType.OpenAIResponses:
+            return new CustomOpenAIResponses(
+              {
+                apiKey: providerSetting.apiKey || '',
+                apiHost: formattedApiHost,
+                apiPath: providerSetting.apiPath || '',
+                model,
+                temperature: settings.temperature,
+                topP: settings.topP,
+                maxOutputTokens: settings.maxTokens,
+                stream: settings.stream,
+                useProxy: providerSetting.useProxy,
+              },
+              dependencies
+            )
+
+          case ModelProviderType.OpenAI:
+          default:
+            return new CustomOpenAI(
+              {
+                apiKey: providerSetting.apiKey || '',
+                apiHost: formattedApiHost,
+                apiPath: providerSetting.apiPath || '',
+                model,
+                temperature: settings.temperature,
+                topP: settings.topP,
+                maxOutputTokens: settings.maxTokens,
+                stream: settings.stream,
+                useProxy: providerSetting.useProxy,
+              },
+              dependencies
+            )
+        }
       } else {
-        throw new Error(`Cannot find model with provider: ${setting.provider}`)
+        throw new Error(`Cannot find model with provider: ${settings.provider}`)
       }
   }
 }
 
 export const aiProviderNameHash: Record<ModelProvider, string> = {
   [ModelProviderEnum.OpenAI]: 'OpenAI API',
+  [ModelProviderEnum.OpenAIResponses]: 'OpenAI Responses API',
   [ModelProviderEnum.Azure]: 'Azure OpenAI API',
   [ModelProviderEnum.ChatGLM6B]: 'ChatGLM API',
   [ModelProviderEnum.ChatboxAI]: 'Chatbox AI',
@@ -336,6 +402,7 @@ export const aiProviderNameHash: Record<ModelProvider, string> = {
   [ModelProviderEnum.LMStudio]: 'LM Studio API',
   [ModelProviderEnum.Perplexity]: 'Perplexity API',
   [ModelProviderEnum.XAI]: 'xAI API',
+  [ModelProviderEnum.OpenRouter]: 'OpenRouter API',
   [ModelProviderEnum.Custom]: 'Custom Provider',
 }
 
@@ -349,6 +416,11 @@ export const AIModelProviderMenuOptionList = [
   {
     value: ModelProviderEnum.OpenAI,
     label: aiProviderNameHash[ModelProviderEnum.OpenAI],
+    disabled: false,
+  },
+  {
+    value: ModelProviderEnum.OpenAIResponses,
+    label: aiProviderNameHash[ModelProviderEnum.OpenAIResponses],
     disabled: false,
   },
   {
@@ -379,6 +451,11 @@ export const AIModelProviderMenuOptionList = [
   {
     value: ModelProviderEnum.SiliconFlow,
     label: aiProviderNameHash[ModelProviderEnum.SiliconFlow],
+    disabled: false,
+  },
+  {
+    value: ModelProviderEnum.OpenRouter,
+    label: aiProviderNameHash[ModelProviderEnum.OpenRouter],
     disabled: false,
   },
   {
@@ -417,7 +494,3 @@ export const AIModelProviderMenuOptionList = [
   //     disabled: true,
   // },
 ]
-
-function keepRange(num: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, num))
-}

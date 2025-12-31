@@ -1,13 +1,11 @@
+import { Box, Button, Dialog, DialogActions, DialogContent, DialogContentText } from '@mui/material'
 import React from 'react'
-import { Box, Button, Dialog, DialogContent, DialogActions, DialogContentText } from '@mui/material'
 import { useTranslation } from 'react-i18next'
-import * as remote from '../packages/remote'
-import { getDefaultStore } from 'jotai'
-import platform from '@/platform'
-import { settingsAtom } from '../stores/atoms'
-import storage from '../storage'
 import Markdown from '@/components/Markdown'
 import { trackingEvent } from '@/packages/event'
+import platform from '@/platform'
+import { settingsStore } from '@/stores/settingsStore'
+import * as remote from '../packages/remote'
 
 const { useEffect, useState } = React
 
@@ -17,9 +15,8 @@ export default function RemoteDialogWindow() {
   const [dialogConfig, setDialogConfig] = useState<remote.DialogConfig | null>(null)
 
   const checkRemoteDialog = async () => {
-    const store = getDefaultStore()
     const config = await platform.getConfig()
-    const settings = store.get(settingsAtom)
+    const settings = settingsStore.getState().getSettings()
     const version = await platform.getVersion()
     if (version === '0.0.1') {
       return // 本地开发环境不显示远程弹窗

@@ -1,20 +1,20 @@
-import NiceModal, { muiDialogV5, useModal } from '@ebay/nice-modal-react'
-import { Flex, Stack, Switch, Text, Tooltip } from '@mantine/core'
-import ImageIcon from '@mui/icons-material/Image'
-import SmartToyIcon from '@mui/icons-material/SmartToy'
+import NiceModal, { useModal } from '@ebay/nice-modal-react'
 import {
+  ActionIcon,
+  Box,
   Button,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogContentText,
-  DialogTitle,
-  TextField,
-  Typography,
-  useTheme,
-} from '@mui/material'
-import { IconInfoCircle } from '@tabler/icons-react'
-import { useAtomValue } from 'jotai'
+  FileButton,
+  Flex,
+  Input,
+  Modal,
+  Slider,
+  Stack,
+  Switch,
+  Text,
+  Textarea,
+  Tooltip,
+} from '@mantine/core'
+import { IconInfoCircle, IconTrash } from '@tabler/icons-react'
 import { pick } from 'lodash'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -26,32 +26,28 @@ import {
   ModelProviderEnum,
   type Session,
   type SessionSettings,
-  type Settings,
-} from '@/../shared/types'
-import { Accordion, AccordionDetails, AccordionSummary } from '@/components/Accordion'
-import EditableAvatar from '@/components/EditableAvatar'
-import { handleImageInputAndSave, ImageInStorage } from '@/components/Image'
-import ImageCountSlider from '@/components/ImageCountSlider'
+} from 'src/shared/types'
+import { AssistantAvatar } from '@/components/Avatar'
+import { handleImageInputAndSave } from '@/components/Image'
 import ImageStyleSelect from '@/components/ImageStyleSelect'
 import LazyNumberInput from '@/components/LazyNumberInput'
 import MaxContextMessageCountSlider from '@/components/MaxContextMessageCountSlider'
+import { ScalableIcon } from '@/components/ScalableIcon'
 import SegmentedControl from '@/components/SegmentedControl'
 import SliderWithInput from '@/components/SliderWithInput'
 import { useIsSmallScreen } from '@/hooks/useScreenChange'
 import { trackingEvent } from '@/packages/event'
 import { StorageKeyGenerator } from '@/storage/StoreStorage'
-import * as atoms from '@/stores/atoms'
-import * as sessionActions from '@/stores/sessionActions'
-import { saveSession } from '@/stores/sessionStorageMutations'
-import { getMessageText } from '@/utils/message'
+import { updateSession } from '@/stores/chatStore'
+import { getSessionMeta, mergeSettings } from '@/stores/sessionHelpers'
+import { settingsStore, useSettingsStore } from '@/stores/settingsStore'
+import { getMessageText } from '../../shared/utils/message'
 
 const SessionSettingsModal = NiceModal.create(
   ({ session, disableAutoSave = false }: { session: Session; disableAutoSave?: boolean }) => {
     const modal = useModal()
     const { t } = useTranslation()
     const isSmallScreen = useIsSmallScreen()
-    const globalSettings = useAtomValue(atoms.settingsAtom)
-    const theme = useTheme()
 
     const [editingData, setEditingData] = useState<Session | null>(session || null)
     useEffect(() => {
@@ -103,27 +99,43 @@ const SessionSettingsModal = NiceModal.create(
       modal.resolve()
       modal.hide()
     }
+
+    const applySessionChanges = (target: Session) => {
+      target.name = (target.name ?? '').trim() || session.name
+      const trimmed = systemPrompt.trim()
+      const messages = Array.isArray(target.messages) ? [...target.messages] : []
+      if (trimmed === '') {
+        target.messages = messages.filter((m) => m.role !== 'system')
+      } else {
+        const idx = messages.findIndex((m) => m.role === 'system')
+        if (idx >= 0) {
+          const sys = { ...messages[idx], contentParts: [{ type: 'text' as const, text: trimmed }] }
+          target.messages = [...messages.slice(0, idx), sys, ...messages.slice(idx + 1)]
+        } else {
+          target.messages = [createMessage('system', trimmed), ...messages]
+        }
+      }
+      return target
+    }
     const onSave = () => {
       if (!session || !editingData) {
         return
       }
-      if (editingData.name === '') {
-        editingData.name = session.name
-      }
-      editingData.name = editingData.name.trim()
-      if (systemPrompt === '') {
-        editingData.messages = editingData.messages.filter((m) => m.role !== 'system')
-      } else {
-        const systemMessage = editingData.messages.find((m) => m.role === 'system')
-        if (systemMessage) {
-          systemMessage.contentParts = [{ type: 'text', text: systemPrompt.trim() }]
-        } else {
-          editingData.messages.unshift(createMessage('system', systemPrompt.trim()))
-        }
-      }
+
       if (!disableAutoSave) {
-        saveSession(editingData)
+        void updateSession(editingData.id, (s) => {
+          const merged = {
+            ...(s ?? {}),
+            ...getSessionMeta(editingData),
+            settings: editingData.settings,
+          } as Session
+
+          return applySessionChanges(merged)
+        })
+      } else {
+        applySessionChanges(editingData)
       }
+
       // setChatConfigDialogSessionId(null)
       modal.resolve(editingData)
       modal.hide()
@@ -134,134 +146,133 @@ const SessionSettingsModal = NiceModal.create(
     }
 
     return (
-      <Dialog
-        {...muiDialogV5(modal)}
+      <Modal
+        opened={modal.visible}
         onClose={() => {
           modal.resolve()
           modal.hide()
         }}
-        fullWidth
+        // fullScreen={isSmallScreen}
+        centered
+        size="lg"
+        title={t('Conversation Settings')}
+        onFocus={(e) => e.stopPropagation()}
+        // fullWidth
       >
-        <DialogTitle>{t('Conversation Settings')}</DialogTitle>
-        <DialogContent>
-          <DialogContentText></DialogContentText>
+        <div style={{ maxHeight: '60vh', overflowY: 'auto', overflowX: 'hidden' }}>
+          <Stack>
+            <FileButton
+              accept="image/png,image/jpeg"
+              onChange={(file) => {
+                if (file) {
+                  const key = StorageKeyGenerator.picture(`assistant-avatar:${session?.id}`)
+                  handleImageInputAndSave(file, key, () => setEditingData({ ...editingData, assistantAvatarKey: key }))
+                }
+              }}
+            >
+              {(props) => (
+                <Flex justify="center">
+                  <Flex className="relative">
+                    <AssistantAvatar
+                      size={isSmallScreen ? 64 : 80}
+                      avatarKey={editingData.assistantAvatarKey}
+                      picUrl={editingData.picUrl}
+                      sessionType={editingData.type}
+                      {...props}
+                    />
 
-          <EditableAvatar
-            onChange={(event) => {
-              if (!event.target.files) {
-                return
-              }
-              const file = event.target.files[0]
-              if (file) {
-                const key = StorageKeyGenerator.picture(`assistant-avatar:${session?.id}`)
-                handleImageInputAndSave(file, key, () => setEditingData({ ...editingData, assistantAvatarKey: key }))
-              }
-            }}
-            onRemove={() => {
-              setEditingData({ ...editingData, assistantAvatarKey: undefined })
-            }}
-            removable={!!editingData.assistantAvatarKey}
-            sx={{
-              backgroundColor:
-                editingData.type === 'picture'
-                  ? theme.palette.secondary.main
-                  : editingData.picUrl
-                    ? theme.palette.background.default
-                    : theme.palette.primary.main,
-            }}
-          >
-            {editingData.assistantAvatarKey ? (
-              <ImageInStorage
-                storageKey={editingData.assistantAvatarKey}
-                className="object-cover object-center w-full h-full"
-              />
-            ) : editingData.picUrl ? (
-              <img src={editingData.picUrl} className="object-cover object-center w-full h-full" />
-            ) : editingData.type === 'picture' ? (
-              <ImageIcon
-                fontSize="large"
-                sx={{
-                  width: '60px',
-                  height: '60px',
+                    {editingData.assistantAvatarKey && (
+                      <ActionIcon
+                        color="chatbox-error"
+                        size={24}
+                        radius="xl"
+                        bottom={0}
+                        right={0}
+                        className="absolute"
+                        onClick={() => {
+                          setEditingData({ ...editingData, assistantAvatarKey: undefined })
+                        }}
+                      >
+                        <ScalableIcon icon={IconTrash} size={18} />
+                      </ActionIcon>
+                    )}
+                  </Flex>
+                </Flex>
+              )}
+            </FileButton>
+
+            <Input.Wrapper label={t('name')}>
+              <Input
+                placeholder={t('name')}
+                autoFocus={!isSmallScreen}
+                value={editingData.name}
+                onChange={(e) => setEditingData({ ...editingData, name: e.target.value })}
+                classNames={{
+                  input: '!text-chatbox-tint-primary',
                 }}
               />
-            ) : globalSettings.defaultAssistantAvatarKey ? (
-              <ImageInStorage
-                storageKey={globalSettings.defaultAssistantAvatarKey}
-                className="object-cover object-center w-full h-full"
-              />
-            ) : (
-              <SmartToyIcon fontSize="large" />
-            )}
-          </EditableAvatar>
-          <TextField
-            autoFocus={!isSmallScreen}
-            margin="dense"
-            label={t('name')}
-            type="text"
-            fullWidth
-            variant="outlined"
-            value={editingData.name}
-            onChange={(e) => setEditingData({ ...editingData, name: e.target.value })}
-          />
-          <div className="mt-1">
-            <TextField
-              margin="dense"
+            </Input.Wrapper>
+
+            <Textarea
               label={t('Instruction (System Prompt)')}
               placeholder={t('Copilot Prompt Demo') || ''}
-              fullWidth
-              variant="outlined"
-              multiline
+              autosize
               minRows={2}
-              maxRows={8}
+              maxRows={12}
               value={systemPrompt}
               onChange={(event) => setSystemPrompt(event.target.value)}
+              classNames={{
+                input: '!text-chatbox-tint-primary',
+              }}
             />
-          </div>
 
-          <Accordion defaultExpanded={true} className="mt-2">
-            <AccordionSummary aria-controls="panel1a-content">
-              <div className="flex flex-row w-full justify-between items-center">
-                <Typography>{t('Specific model settings')}</Typography>
-              </div>
-              {editingData.settings && (
-                <Button size="small" variant="text" onClick={onReset}>
+            <Stack className=" border border-solid border-chatbox-border-primary rounded-md">
+              <Flex
+                align="center"
+                justify="space-between"
+                px="md"
+                py="sm"
+                className="border-0 border-b border-solid border-chatbox-border-primary"
+              >
+                <Text fw={700}>{t('Specific model settings')}</Text>
+                <Button size="compact-sm" color="chatbox-secondary" variant="light" onClick={onReset}>
                   {t('Reset')}
                 </Button>
-              )}
-            </AccordionSummary>
-            <AccordionDetails>
-              {/* <Text>{JSON.stringify(editingData.settings)}</Text> */}
-              {isChatSession(session) && (
-                <ChatConfig
-                  settings={editingData.settings}
-                  globalSettings={globalSettings}
-                  onSettingsChange={(d) =>
-                    setEditingData((_data) => {
-                      if (_data) {
-                        return {
-                          ..._data,
-                          settings: {
-                            ..._data?.settings,
-                            ...d,
-                          },
+              </Flex>
+
+              <Box px="md" py="sm">
+                {isChatSession(session) && (
+                  <ChatConfig
+                    settings={editingData.settings}
+                    onSettingsChange={(d) =>
+                      setEditingData((_data) => {
+                        if (_data) {
+                          return {
+                            ..._data,
+                            settings: {
+                              ..._data?.settings,
+                              ...d,
+                            },
+                          }
+                        } else {
+                          return null
                         }
-                      } else {
-                        return null
-                      }
-                    })
-                  }
-                />
-              )}
-              {isPictureSession(session) && <PictureConfig dataEdit={editingData} setDataEdit={setEditingData} />}
-            </AccordionDetails>
-          </Accordion>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={onCancel}>{t('cancel')}</Button>
+                      })
+                    }
+                  />
+                )}
+                {isPictureSession(session) && <PictureConfig dataEdit={editingData} setDataEdit={setEditingData} />}
+              </Box>
+            </Stack>
+          </Stack>
+        </div>
+        <Flex justify="flex-end" align="center" gap="md" px="md" py="sm" pb="0">
+          <Button onClick={onCancel} variant="subtle" color="chatbox-secondary">
+            {t('cancel')}
+          </Button>
           <Button onClick={onSave}>{t('save')}</Button>
-        </DialogActions>
-      </Dialog>
+        </Flex>
+      </Modal>
     )
   }
 )
@@ -364,7 +375,7 @@ function ThinkingBudgetConfig({
   const currentSegmentValue = getCurrentSegmentValue()
 
   return (
-    <Stack gap="md">
+    <Stack gap="md" style={{ minWidth: 0 }}>
       <Flex align="center" gap="xs">
         <Text size="sm" fw="600">
           {t('Thinking Budget')}
@@ -377,16 +388,19 @@ function ThinkingBudgetConfig({
           zIndex={3000}
           events={{ hover: true, focus: true, touch: true }}
         >
-          <IconInfoCircle size={20} className="text-[var(--mantine-color-chatbox-tertiary-text)]" />
+          <ScalableIcon icon={IconInfoCircle} size={20} className="text-chatbox-tint-tertiary" />
         </Tooltip>
       </Flex>
 
-      <SegmentedControl
-        key="thinking-budget-control"
-        value={currentSegmentValue}
-        onChange={handleThinkingConfigChange}
-        data={thinkingBudgetOptions}
-      />
+      <div style={{ minWidth: 0, overflowX: 'auto' }}>
+        <SegmentedControl
+          key="thinking-budget-control"
+          value={currentSegmentValue}
+          onChange={handleThinkingConfigChange}
+          data={thinkingBudgetOptions}
+          fullWidth={false}
+        />
+      </div>
 
       {currentSegmentValue === 'custom' && (
         <SliderWithInput
@@ -409,7 +423,7 @@ function ClaudeProviderConfig({
   onSettingsChange: (data: Session['settings']) => void
 }) {
   const { t } = useTranslation()
-  const providerOptions = settings?.providerOptions?.claude || {}
+  const providerOptions = settings?.providerOptions?.claude
 
   const handleConfigChange = (config: { budgetTokens: number; enabled: boolean }) => {
     onSettingsChange({
@@ -426,8 +440,8 @@ function ClaudeProviderConfig({
 
   return (
     <ThinkingBudgetConfig
-      currentBudgetTokens={providerOptions.thinking?.budgetTokens || 1024}
-      isEnabled={providerOptions.thinking?.type === 'enabled'}
+      currentBudgetTokens={providerOptions?.thinking?.budgetTokens || 1024}
+      isEnabled={providerOptions?.thinking?.type === 'enabled'}
       onConfigChange={handleConfigChange}
       tooltipText={t('Thinking Budget only works for 3.7 or later models')}
       minValue={1024}
@@ -444,7 +458,7 @@ function OpenAIProviderConfig({
   onSettingsChange: (data: Session['settings']) => void
 }) {
   const { t } = useTranslation()
-  const providerOptions = settings?.providerOptions?.openai || {}
+  const providerOptions = settings?.providerOptions?.openai
 
   // Memoize options to prevent recreation on every render
   const reasoningEffortOptions = useMemo(
@@ -459,7 +473,7 @@ function OpenAIProviderConfig({
 
   const handleReasoningEffortChange = useCallback(
     (value: string) => {
-      const reasoningEffort = value === 'null' ? null : (value as 'low' | 'medium' | 'high')
+      const reasoningEffort = value === 'null' ? undefined : (value as 'low' | 'medium' | 'high')
       onSettingsChange({
         providerOptions: {
           openai: { reasoningEffort },
@@ -471,9 +485,9 @@ function OpenAIProviderConfig({
 
   // Simplify value calculation to avoid instability
   const currentValue = useMemo(() => {
-    const effort = providerOptions.reasoningEffort
-    return effort === null || effort === undefined ? 'null' : effort
-  }, [providerOptions.reasoningEffort])
+    const effort = providerOptions?.reasoningEffort
+    return effort === undefined ? 'null' : effort
+  }, [providerOptions?.reasoningEffort])
 
   return (
     <Stack gap="md">
@@ -489,7 +503,7 @@ function OpenAIProviderConfig({
           zIndex={3000}
           events={{ hover: true, focus: true, touch: true }}
         >
-          <IconInfoCircle size={20} className="text-[var(--mantine-color-chatbox-tertiary-text)]" />
+          <ScalableIcon icon={IconInfoCircle} size={20} className="text-chatbox-tint-tertiary" />
         </Tooltip>
       </Flex>
 
@@ -511,7 +525,7 @@ function GoogleProviderConfig({
   onSettingsChange: (data: Session['settings']) => void
 }) {
   const { t } = useTranslation()
-  const providerOptions = settings?.providerOptions?.google || {}
+  const providerOptions = settings?.providerOptions?.google
 
   const handleConfigChange = (config: { budgetTokens: number; enabled: boolean }) => {
     onSettingsChange({
@@ -523,8 +537,8 @@ function GoogleProviderConfig({
 
   return (
     <ThinkingBudgetConfig
-      currentBudgetTokens={providerOptions.thinkingConfig?.thinkingBudget || 0}
-      isEnabled={(providerOptions.thinkingConfig?.thinkingBudget || 0) > 0}
+      currentBudgetTokens={providerOptions?.thinkingConfig?.thinkingBudget || 0}
+      isEnabled={(providerOptions?.thinkingConfig?.thinkingBudget || 0) > 0}
       onConfigChange={handleConfigChange}
       tooltipText={t('Thinking Budget only works for 2.0 or later models')}
       minValue={0}
@@ -536,13 +550,12 @@ function GoogleProviderConfig({
 export function ChatConfig({
   settings,
   onSettingsChange,
-  globalSettings,
 }: {
   settings: Session['settings']
-  globalSettings: Settings
   onSettingsChange: (data: Session['settings']) => void
 }) {
   const { t } = useTranslation()
+  const globalSettingsStream = useSettingsStore((s) => s.stream)
 
   // 获取当前模型的默认设置
   const getCurrentModelDefaults = (): { maxTokens?: number; temperature?: number; topP?: number } => {
@@ -629,7 +642,7 @@ export function ChatConfig({
             zIndex={3000}
             events={{ hover: true, focus: true, touch: true }}
           >
-            <IconInfoCircle size={20} className="text-[var(--mantine-color-chatbox-tertiary-text)]" />
+            <ScalableIcon icon={IconInfoCircle} size={20} className="text-chatbox-tint-tertiary" />
           </Tooltip>
           {!useOverrides && modelDefaults.temperature && (
             <Text size="xs" c="dimmed">
@@ -667,7 +680,7 @@ export function ChatConfig({
             zIndex={3000}
             events={{ hover: true, focus: true, touch: true }}
           >
-            <IconInfoCircle size={20} className="text-[var(--mantine-color-chatbox-tertiary-text)]" />
+            <ScalableIcon icon={IconInfoCircle} size={20} className="text-chatbox-tint-tertiary" />
           </Tooltip>
           {!useOverrides && modelDefaults.topP && (
             <Text size="xs" c="dimmed">
@@ -705,7 +718,7 @@ export function ChatConfig({
             zIndex={3000}
             events={{ hover: true, focus: true, touch: true }}
           >
-            <IconInfoCircle size={20} className="text-[var(--mantine-color-chatbox-tertiary-text)]" />
+            <ScalableIcon icon={IconInfoCircle} size={20} className="text-chatbox-tint-tertiary" />
           </Tooltip>
           {!useOverrides && modelDefaults.maxTokens && (
             <Text size="xs" c="dimmed">
@@ -738,7 +751,7 @@ export function ChatConfig({
               {t('Stream output')}
             </Text>
             <Switch
-              checked={settings?.stream ?? globalSettings?.stream ?? true}
+              checked={settings?.stream ?? globalSettingsStream ?? true}
               onChange={(v) => onSettingsChange({ stream: v.target.checked })}
             />
           </Flex>
@@ -761,9 +774,10 @@ export function ChatConfig({
 }
 
 function PictureConfig(props: { dataEdit: Session; setDataEdit: (data: Session) => void }) {
+  const { t } = useTranslation()
   const { dataEdit, setDataEdit } = props
-  const globalSettings = useAtomValue(atoms.settingsAtom)
-  const sessionSettings = sessionActions.mergeSettings(globalSettings, dataEdit.settings || {}, dataEdit.type || 'chat')
+  const globalSettings = settingsStore.getState().getSettings()
+  const sessionSettings = mergeSettings(globalSettings, dataEdit.settings || {}, dataEdit.type || 'chat')
   const updateSettingsEdit = (updated: Partial<SessionSettings>) => {
     setDataEdit({
       ...dataEdit,
@@ -774,17 +788,27 @@ function PictureConfig(props: { dataEdit: Session; setDataEdit: (data: Session) 
     })
   }
   return (
-    <Stack gap="md" className="mt-8">
+    <Stack gap="md" className="my-4">
       <ImageStyleSelect
         value={sessionSettings.dalleStyle || pictureSessionSettings().dalleStyle!}
         onChange={(v) => updateSettingsEdit({ dalleStyle: v })}
         className={sessionSettings.dalleStyle === undefined ? 'opacity-50' : ''}
       />
-      <ImageCountSlider
-        value={sessionSettings.imageGenerateNum || pictureSessionSettings().imageGenerateNum!}
-        onChange={(v) => updateSettingsEdit({ imageGenerateNum: v })}
-        className={sessionSettings.imageGenerateNum === undefined ? 'opacity-50' : ''}
-      />
+      <Stack>
+        <Text size="sm" fw="600">
+          {t('Number of Images per Reply')}
+        </Text>
+        <Slider
+          value={sessionSettings.imageGenerateNum || pictureSessionSettings().imageGenerateNum!}
+          onChange={(v) => updateSettingsEdit({ imageGenerateNum: v })}
+          min={1}
+          max={10}
+          step={1}
+          marks={Array.from({ length: 10 }).map((_, i) => ({
+            value: i + 1,
+          }))}
+        />
+      </Stack>
     </Stack>
   )
 }

@@ -1,6 +1,8 @@
 import { CohereClient } from 'cohere-ai'
 import { getModel, getProviderSettings } from '../../shared/models'
 import { getChatboxAPIOrigin } from '../../shared/request/chatboxai_pool'
+import { SessionSettingsSchema } from '../../shared/types'
+import { parseKnowledgeBaseModelString } from '../../shared/utils/knowledge-base-model-parser'
 import { createModelDependencies } from '../adapters'
 import { sentry } from '../adapters/sentry'
 import { cache } from '../cache'
@@ -28,11 +30,11 @@ function getMergedSettings(providerId: string, modelId: string) {
     }
 
     // Build complete settings object for getModel
-    return {
+    return SessionSettingsSchema.parse({
       ...globalSettings,
       provider: providerId,
       modelId,
-    }
+    })
   } catch (error: any) {
     log.error(`[MODEL] Failed to get merged settings for ${providerId}:${modelId}`, error)
     if (!error.message.includes('not set')) {
@@ -82,8 +84,8 @@ export async function getEmbeddingProvider(kbId: number) {
           throw error
         }
 
-        const [providerId, modelId] = embeddingModel.split(':')
-        if (!providerId || !modelId) {
+        const parsed = parseKnowledgeBaseModelString(embeddingModel)
+        if (!parsed) {
           const error = new Error(`Invalid embedding model format: ${embeddingModel}`)
           log.error(`[MODEL] Invalid embedding model format: ${embeddingModel}`)
           sentry.withScope((scope) => {
@@ -96,8 +98,9 @@ export async function getEmbeddingProvider(kbId: number) {
           throw error
         }
 
+        const { providerId, modelId } = parsed
         const modelSettings = getMergedSettings(providerId, modelId)
-        const model = getModel(modelSettings, getConfig(), await createModelDependencies())
+        const model = getModel(modelSettings, getSettings(), getConfig(), await createModelDependencies())
         // Force cast to AbstractAISDKModel to access getTextEmbeddingModel method
         return (model as any).getTextEmbeddingModel({})
       } catch (error: any) {
@@ -141,8 +144,8 @@ export async function getVisionProvider(kbId: number) {
           return null
         }
 
-        const [providerId, modelId] = visionModel.split(':')
-        if (!providerId || !modelId) {
+        const parsed = parseKnowledgeBaseModelString(visionModel)
+        if (!parsed) {
           const error = new Error(`Invalid vision model format: ${visionModel}`)
           log.error(`[MODEL] Invalid vision model format: ${visionModel}`)
           sentry.withScope((scope) => {
@@ -155,9 +158,10 @@ export async function getVisionProvider(kbId: number) {
           throw error
         }
 
+        const { providerId, modelId } = parsed
         const settingsForModel = getMergedSettings(providerId, modelId)
         const dependencies = await createModelDependencies()
-        const model = getModel(settingsForModel, getConfig(), dependencies)
+        const model = getModel(settingsForModel, getSettings(), getConfig(), dependencies)
 
         return { model, dependencies }
       } catch (error: any) {
@@ -197,8 +201,8 @@ export async function getRerankProvider(kbId: number) {
           return null
         }
 
-        const [providerId, modelId] = rerankModel.split(':')
-        if (!providerId || !modelId) {
+        const parsed = parseKnowledgeBaseModelString(rerankModel)
+        if (!parsed) {
           const error = new Error(`Invalid rerank model format: ${rerankModel}`)
           log.error(`[MODEL] Invalid rerank model format: ${rerankModel}`)
           sentry.withScope((scope) => {
@@ -211,8 +215,9 @@ export async function getRerankProvider(kbId: number) {
           throw error
         }
 
-        const settings = getMergedSettings(providerId, modelId)
-        const { providerSetting, formattedApiHost } = getProviderSettings(settings)
+        const { providerId, modelId } = parsed
+        const sessionSettings = getMergedSettings(providerId, modelId)
+        const { providerSetting, formattedApiHost } = getProviderSettings(sessionSettings, getSettings())
 
         let apiHost = formattedApiHost
         let token = providerSetting.apiKey

@@ -1,18 +1,16 @@
-import { Fab, useTheme } from '@mui/material'
-import { useTranslation } from 'react-i18next'
-import * as atoms from '../stores/atoms'
-import { useSetAtom, useAtomValue } from 'jotai'
-import { Img } from '@/components/Image'
-import storage from '@/storage'
-import SaveIcon from '@mui/icons-material/Save'
 import CloseIcon from '@mui/icons-material/Close'
+import SaveIcon from '@mui/icons-material/Save'
+import { Fab, useTheme } from '@mui/material'
+import { useCallback, useEffect, useState } from 'react'
+import { TransformComponent, TransformWrapper } from 'react-zoom-pan-pinch'
+import type { MessagePicture } from 'src/shared/types'
+import { Img } from '@/components/Image'
 import platform from '@/platform'
-import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch'
-import { MessagePicture } from 'src/shared/types'
-import { useEffect, useState, useCallback } from 'react'
+import storage from '@/storage'
+import { useUIStore } from '@/stores/uiStore'
 
 export default function PictureDialog(props: {}) {
-  const pictureShow = useAtomValue(atoms.pictureShowAtom)
+  const pictureShow = useUIStore((s) => s.pictureShow)
   if (!pictureShow) {
     return null
   }
@@ -34,7 +32,7 @@ function _PictureDialog(props: {
 }) {
   const { picture, onSave, extraButtons } = props
   const theme = useTheme()
-  const setPictureShow = useSetAtom(atoms.pictureShowAtom)
+  const setPictureShow = useUIStore((s) => s.setPictureShow)
   const [url, setUrl] = useState(picture.url)
 
   useEffect(() => {

@@ -44,8 +44,9 @@ interface OllamaOptions {
   model: ProviderModelInfo
   temperature?: number
   topP?: number
-  maxTokens?: number
+  maxOutputTokens?: number
   stream?: boolean
+  useProxy?: boolean
 }
 
 export default class Ollama extends OpenAICompatible {
@@ -62,8 +63,9 @@ export default class Ollama extends OpenAICompatible {
         model: ollamaOptions.model,
         temperature: ollamaOptions.temperature,
         topP: ollamaOptions.topP,
-        maxTokens: ollamaOptions.maxTokens,
+        maxOutputTokens: ollamaOptions.maxOutputTokens,
         stream: ollamaOptions.stream,
+        useProxy: ollamaOptions.useProxy,
       },
       dependencies
     )

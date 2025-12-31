@@ -1,6 +1,6 @@
-import { QueryResult } from '@mastra/core/vector'
-import { RerankerFunctionOptions, RerankResult } from '@mastra/rag/dist/_tsup-dts-rollup'
-import { CohereClient } from 'cohere-ai'
+import type { QueryResult } from '@mastra/core/vector'
+import type { RerankerFunctionOptions, RerankResult } from '@mastra/rag/dist/rerank'
+import type { CohereClient } from 'cohere-ai'
 
 // Takes in a list of results from a vector store and reranks them based on Cohere's rerank API
 export async function rerank(

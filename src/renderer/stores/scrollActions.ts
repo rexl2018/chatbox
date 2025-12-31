@@ -1,14 +1,22 @@
-import { getDefaultStore } from 'jotai'
-import * as atoms from './atoms'
+import { getSession } from './chatStore'
+import { getAllMessageList } from './sessionHelpers'
+import { uiStore } from './uiStore'
 
 // scrollToMessage 滚动到指定消息，如果消息不存在则返回 false
-export function scrollToMessage(
+export async function scrollToMessage(
+  sessionId: string,
   msgId: string,
   align: 'start' | 'center' | 'end' = 'start',
   behavior: 'auto' | 'smooth' = 'auto' // 'auto' 立即滚动到指定位置，'smooth' 平滑滚动到指定位置
-): boolean {
-  const store = getDefaultStore()
-  const currentMessages = store.get(atoms.currentMessageListAtom)
+): Promise<boolean> {
+  const session = await getSession(sessionId)
+  if (!session) {
+    return false
+  }
+  const currentMessages = getAllMessageList(session)
+  if (!currentMessages) {
+    return false
+  }
   const index = currentMessages.findIndex((msg) => msg.id === msgId)
   if (index === -1) {
     return false
@@ -18,33 +26,22 @@ export function scrollToMessage(
 }
 
 export function scrollToIndex(
-  index: number,
+  index: number | 'LAST',
   align: 'start' | 'center' | 'end' = 'start',
   behavior: 'auto' | 'smooth' = 'auto' // 'auto' 立即滚动到指定位置，'smooth' 平滑滚动到指定位置
 ) {
-  const store = getDefaultStore()
-  const virtuoso = store.get(atoms.messageScrollingAtom)
+  const virtuoso = uiStore.getState().messageScrolling
   virtuoso?.current?.scrollToIndex({ index, align, behavior })
 }
 
 export function scrollToTop(behavior: 'auto' | 'smooth' = 'auto') {
-  const store = getDefaultStore()
-  const currentMessages = store.get(atoms.currentMessageListAtom)
-  if (currentMessages.length === 0) {
-    return
-  }
   clearAutoScroll()
   return scrollToIndex(0, 'start', behavior)
 }
 
 export function scrollToBottom(behavior: 'auto' | 'smooth' = 'auto') {
-  const store = getDefaultStore()
-  const currentMessages = store.get(atoms.currentMessageListAtom)
-  if (currentMessages.length === 0) {
-    return
-  }
   clearAutoScroll()
-  return scrollToIndex(currentMessages.length - 1, 'end', behavior)
+  return scrollToIndex('LAST', 'end', behavior)
 }
 
 let autoScrollTask: {
@@ -77,17 +74,6 @@ export function startAutoScroll(
   return newId
 }
 
-export function tickAutoScroll(id: string) {
-  if (!autoScrollTask || autoScrollTask.id !== id) {
-    return
-  }
-  const { msgId, align, behavior } = autoScrollTask.task
-  const succeed = scrollToMessage(msgId, align, behavior)
-  if (!succeed) {
-    clearAutoScroll()
-  }
-}
-
 export function clearAutoScroll(id?: string) {
   if (!autoScrollTask) {
     return true
@@ -100,8 +86,7 @@ export function clearAutoScroll(id?: string) {
 }
 
 export function getMessageListViewportHeight() {
-  const store = getDefaultStore()
-  const messageListElement = store.get(atoms.messageListElementAtom)
+  const messageListElement = uiStore.getState().messageListElement
   if (!messageListElement) {
     return 0
   }

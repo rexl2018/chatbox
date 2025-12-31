@@ -1,9 +1,20 @@
+/** biome-ignore-all lint/suspicious/noExplicitAny: <any> */
 import type { Config, Language, Settings, ShortcutSetting } from 'src/shared/types'
 import type { KnowledgeBaseController } from './knowledge-base/interface'
 
 export type PlatformType = 'web' | 'desktop' | 'mobile'
 
-export interface Platform {
+export interface Storage {
+  getStorageType(): string
+  setStoreValue(key: string, value: any): Promise<void>
+  getStoreValue(key: string): Promise<any>
+  delStoreValue(key: string): Promise<void>
+  getAllStoreValues(): Promise<{ [key: string]: any }>
+  getAllStoreKeys(): Promise<string[]>
+  setAllStoreValues(data: { [key: string]: any }): Promise<void>
+}
+
+export interface Platform extends Storage {
   type: PlatformType
 
   exporter: Exporter
@@ -19,6 +30,7 @@ export interface Platform {
   onUpdateDownloaded(callback: () => void): () => void
   onNavigate?(callback: (path: string) => void): () => void
   openLink(url: string): Promise<void>
+  getDeviceName(): Promise<string>
   getInstanceName(): Promise<string>
   getLocale(): Promise<Language>
   ensureShortcutConfig(config: ShortcutSetting): Promise<void>
@@ -29,12 +41,6 @@ export interface Platform {
 
   getConfig(): Promise<Config>
   getSettings(): Promise<Settings>
-
-  setStoreValue(key: string, value: any): Promise<void>
-  getStoreValue(key: string): Promise<any>
-  delStoreValue(key: string): Promise<void>
-  getAllStoreValues(): Promise<{ [key: string]: any }>
-  setAllStoreValues(data: { [key: string]: any }): Promise<void>
 
   // Blob 存储
 
@@ -55,7 +61,7 @@ export interface Platform {
 
   ensureAutoLaunch(enable: boolean): Promise<void>
 
-  parseFileLocally(file: File, options?: { tokenLimit?: number }): Promise<{ key?: string; isSupported: boolean }>
+  parseFileLocally(file: File): Promise<{ key?: string; isSupported: boolean }>
 
   // parseUrl(url: string): Promise<{ key: string, title: string }>
 
@@ -64,6 +70,19 @@ export interface Platform {
   installUpdate(): Promise<void>
 
   getKnowledgeBaseController(): KnowledgeBaseController
+
+  // window controls
+  minimize(): Promise<void>
+
+  maximize(): Promise<void>
+
+  unmaximize(): Promise<void>
+
+  closeWindow(): Promise<void>
+
+  isMaximized(): Promise<boolean>
+
+  onMaximizedChange(callback: (isMaximized: boolean) => void): () => void
 }
 
 export interface Exporter {
@@ -71,4 +90,5 @@ export interface Exporter {
   exportTextFile: (filename: string, content: string) => Promise<void>
   exportImageFile: (basename: string, base64: string) => Promise<void>
   exportByUrl: (filename: string, url: string) => Promise<void>
+  exportStreamingJson: (filename: string, dataCallback: () => AsyncGenerator<string, void, unknown>) => Promise<void>
 }

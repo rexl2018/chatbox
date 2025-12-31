@@ -1,10 +1,9 @@
-import { useCallback, useEffect } from 'react'
-import { mcpController } from '@/packages/mcp/controller'
-import { MCPServerConfig, MCPServerStatus } from '@/packages/mcp/types'
-import { useState } from 'react'
-import { useImmerSettings } from './useSettings'
-import { BUILTIN_MCP_SERVERS, getBuiltinServerConfig } from '@/packages/mcp/builtin'
 import { cloneDeep } from 'lodash'
+import { useCallback, useEffect, useState } from 'react'
+import { BUILTIN_MCP_SERVERS, getBuiltinServerConfig } from '@/packages/mcp/builtin'
+import { mcpController } from '@/packages/mcp/controller'
+import type { MCPServerConfig, MCPServerStatus } from '@/packages/mcp/types'
+import { useSettingsStore } from '@/stores/settingsStore'
 import { trackEvent } from '@/utils/track'
 
 export function useMCPServerStatus(id: string) {
@@ -16,7 +15,7 @@ export function useMCPServerStatus(id: string) {
 }
 
 export function useToggleMCPServer() {
-  const [_, setSettings] = useImmerSettings()
+  const setSettings = useSettingsStore((state) => state.setSettings)
   return useCallback(
     (id: string, enabled: boolean) => {
       let effect = null as { action: 'start'; config: MCPServerConfig } | { action: 'stop'; id: string } | null

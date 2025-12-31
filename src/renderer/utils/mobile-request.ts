@@ -9,7 +9,11 @@ export async function handleMobileRequest(
   body?: RequestInit['body'],
   signal?: AbortSignal
 ): Promise<Response> {
-  const headerObj = Object.fromEntries(headers.entries())
+  // Fix: Convert Headers to plain object without using .entries()
+  const headerObj: Record<string, string> = {}
+  headers.forEach((value, key) => {
+    headerObj[key] = value
+  })
   const isStreaming = body && typeof body === 'string' && JSON.parse(body).stream === true
 
   if (isStreaming) {

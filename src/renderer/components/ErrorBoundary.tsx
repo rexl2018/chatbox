@@ -1,94 +1,71 @@
-import React from 'react'
 import * as Sentry from '@sentry/react'
+import React from 'react'
 import { getLogger } from '../lib/utils'
+import { router } from '../router'
 
 const log = getLogger('ErrorBoundary')
-
-interface ErrorBoundaryState {
-  hasError: boolean
-  error: Error | null
-  errorInfo: React.ErrorInfo | null
-}
 
 interface ErrorBoundaryProps {
   children: React.ReactNode
   fallback?: React.ComponentType<{ error: Error; retry: () => void }>
+  name?: string
 }
 
-export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  constructor(props: ErrorBoundaryProps) {
-    super(props)
-    this.state = {
-      hasError: false,
-      error: null,
-      errorInfo: null,
-    }
-  }
+/**
+ * ErrorBoundary component using Sentry's built-in ErrorBoundary
+ * Automatically reports errors to Sentry with proper context
+ *
+ * Implementation:
+ * - ErrorBoundary errors are tagged with 'errorBoundary'
+ * - These errors are 100% reported to Sentry (see sentry_init.ts)
+ * - Other errors are subject to 10% sampling
+ */
+export function ErrorBoundary({ children, fallback: CustomFallback, name = 'ErrorBoundary' }: ErrorBoundaryProps) {
+  return (
+    <Sentry.ErrorBoundary
+      fallback={(fallbackProps) => {
+        const { error, resetError } = fallbackProps
+        const errorObj = error instanceof Error ? error : new Error(String(error))
 
-  static getDerivedStateFromError(error: Error): Partial<ErrorBoundaryState> {
-    // Update state so the next render will show the fallback UI
-    return {
-      hasError: true,
-      error,
-    }
-  }
+        // Log error locally
+        log.error(`${name} caught an error:`, errorObj)
 
-  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    // Log error details
-    log.error('ErrorBoundary caught an error:', error, errorInfo)
+        // Use custom fallback if provided, otherwise use default
+        if (CustomFallback) {
+          return <CustomFallback error={errorObj} retry={resetError} />
+        }
 
-    // Capture exception in Sentry with additional context
-    Sentry.withScope((scope) => {
-      scope.setTag('errorBoundary', true)
-      scope.setLevel('error')
-      scope.setContext('errorInfo', {
-        componentStack: errorInfo.componentStack,
-        errorBoundary: this.constructor.name,
-      })
-      Object.keys(errorInfo).forEach((key) => {
-        scope.setExtra(key, errorInfo[key as keyof React.ErrorInfo])
-      })
-      Sentry.captureException(error)
-    })
+        return <DefaultErrorFallback error={errorObj} retry={resetError} />
+      }}
+      beforeCapture={(scope, error, componentStack) => {
+        // Add custom context to Sentry
+        scope.setTag('errorBoundary', name)
+        scope.setLevel('error')
 
-    this.setState({
-      error,
-      errorInfo,
-    })
-  }
+        // Add component stack information if available
+        if (typeof componentStack === 'string' && componentStack) {
+          scope.setContext('react', {
+            componentStack,
+            errorBoundary: name,
+          })
+        }
 
-  handleRetry = () => {
-    this.setState({
-      hasError: false,
-      error: null,
-      errorInfo: null,
-    })
-  }
-
-  render() {
-    if (this.state.hasError) {
-      const { fallback: Fallback } = this.props
-      const { error } = this.state
-
-      if (Fallback && error) {
-        return <Fallback error={error} retry={this.handleRetry} />
-      }
-
-      // Default error UI
-      return <DefaultErrorFallback error={error} errorInfo={this.state.errorInfo} retry={this.handleRetry} />
-    }
-
-    return this.props.children
-  }
+        // Log error details locally
+        log.error(`${name} caught an error:`, error, componentStack)
+      }}
+      showDialog={false}
+    >
+      {children}
+    </Sentry.ErrorBoundary>
+  )
 }
 
 interface DefaultErrorFallbackProps {
   error: Error | null
-  errorInfo: React.ErrorInfo | null
   retry: () => void
 }
 
-function DefaultErrorFallback({ error, errorInfo, retry }: DefaultErrorFallbackProps) {
+function DefaultErrorFallback({ error, retry }: DefaultErrorFallbackProps) {
   const [showDetails, setShowDetails] = React.useState(false)
 
   return (
@@ -109,7 +86,10 @@ function DefaultErrorFallback({ error, errorInfo, retry }: DefaultErrorFallbackP
           </button>
 
           <button
-            onClick={() => window.location.reload()}
+            onClick={() => {
+              retry()
+              router.navigate({ to: '/', replace: true })
+            }}
             className="w-full bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-md transition-colors"
           >
             Reload App
@@ -140,14 +120,6 @@ function DefaultErrorFallback({ error, errorInfo, retry }: DefaultErrorFallbackP
                   <pre className="mt-1 text-xs overflow-auto whitespace-pre-wrap max-h-32">{error.stack}</pre>
                 </div>
               )}
-              {errorInfo?.componentStack && (
-                <div>
-                  <strong>Component Stack:</strong>
-                  <pre className="mt-1 text-xs overflow-auto whitespace-pre-wrap max-h-32">
-                    {errorInfo.componentStack}
-                  </pre>
-                </div>
-              )}
             </div>
           </div>
         )}
@@ -160,15 +132,12 @@ function DefaultErrorFallback({ error, errorInfo, retry }: DefaultErrorFallbackP
 export const SentryErrorBoundary = Sentry.withErrorBoundary(
   ({ children }: { children: React.ReactNode }) => <>{children}</>,
   {
-    fallback: ({ error, resetError }) => <DefaultErrorFallback error={error} errorInfo={null} retry={resetError} />,
-    beforeCapture: (scope, error, errorInfo) => {
+    fallback: ({ error, resetError }) => (
+      <DefaultErrorFallback error={error instanceof Error ? error : new Error(String(error))} retry={resetError} />
+    ),
+    beforeCapture: (scope) => {
       scope.setTag('errorBoundary', 'sentry')
       scope.setLevel('error')
-      if (errorInfo) {
-        scope.setContext('errorInfo', {
-          componentStack: (errorInfo as any).componentStack || 'Unknown component stack',
-        })
-      }
     },
   }
 )

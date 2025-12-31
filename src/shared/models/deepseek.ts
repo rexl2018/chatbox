@@ -16,7 +16,7 @@ export default class DeepSeek extends OpenAICompatible {
         model: options.model,
         temperature: options.model.modelId === 'deepseek-reasoner' ? undefined : options.temperature,
         topP: options.model.modelId === 'deepseek-reasoner' ? undefined : options.topP,
-        maxTokens: options.maxTokens,
+        maxOutputTokens: options.maxOutputTokens,
         stream: options.stream,
       },
       dependencies
@@ -28,7 +28,7 @@ export default class DeepSeek extends OpenAICompatible {
   }
 
   isSupportToolUse(scope?: 'web-browsing') {
-    if (scope === 'web-browsing') {
+    if (scope === 'web-browsing' && /deepseek-(v3|r1)$/.test(this.options.model.modelId.toLowerCase())) {
       return false
     }
     return super.isSupportToolUse()

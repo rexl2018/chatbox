@@ -1,21 +1,29 @@
 import NiceModal, { useModal } from '@ebay/nice-modal-react'
-import { Button, Checkbox, Flex, Modal, Stack, Text, TextInput, Select, NumberInput } from '@mantine/core'
+import { Button, Checkbox, Flex, Loader, NumberInput, Select, Stack, Text, TextInput, Tooltip } from '@mantine/core'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ProviderModelInfo } from 'src/shared/types'
+import type { ProviderModelInfo } from 'src/shared/types'
+import { createModelDependencies } from '@/adapters'
+import { Modal } from '@/components/Overlay'
+import platform from '@/platform'
+import { useSettingsStore } from '@/stores/settingsStore'
+import { type ModelTestState, testModelCapabilities } from '@/utils/model-tester'
 
-const ModelEdit = NiceModal.create((props: { model?: ProviderModelInfo }) => {
+const ModelEdit = NiceModal.create((props: { model?: ProviderModelInfo; providerId?: string }) => {
   const modal = useModal()
   const { t } = useTranslation()
+  const settings = useSettingsStore((state) => state)
 
   const isNew = !props.model
   const [modelId, setModelId] = useState(props.model?.modelId || '')
   const [nickname, setNickname] = useState(props.model?.nickname || '')
   const [capabilities, setCapabilities] = useState(props.model?.capabilities || [])
   const [type, setType] = useState<ProviderModelInfo['type']>(props.model?.type || 'chat')
-  const [maxTokens, setMaxTokens] = useState<number | undefined>(props.model?.maxTokens)
-  const [temperature, setTemperature] = useState<number | undefined>(props.model?.temperature)
-  const [topP, setTopP] = useState<number | undefined>(props.model?.topP)
+  const [contextWindow, setContextWindow] = useState<number | undefined>(props.model?.contextWindow)
+  const [maxOutput, setMaxOutput] = useState<number | undefined>(props.model?.maxOutput)
+  const [testState, setTestState] = useState<ModelTestState>({
+    testing: false,
+  })
 
   const typeOptions = [
     { value: 'chat', label: t('Chat')?.toString() ?? 'Chat' },
@@ -28,10 +36,36 @@ const ModelEdit = NiceModal.create((props: { model?: ProviderModelInfo }) => {
     setNickname(props.model?.nickname || '')
     setCapabilities(props.model?.capabilities || [])
     setType(props.model?.type || 'chat')
-    setMaxTokens(props.model?.maxTokens)
-    setTemperature(props.model?.temperature)
-    setTopP(props.model?.topP)
+    setContextWindow(props.model?.contextWindow)
+    setMaxOutput(props.model?.maxOutput)
+    setTestState({ testing: false })
   }, [props])
+
+  const handleTestModel = async () => {
+    if (!modelId || !props.providerId) return
+
+    const configs = await platform.getConfig()
+    const dependencies = await createModelDependencies()
+
+    await testModelCapabilities({
+      providerId: props.providerId,
+      modelId,
+      settings,
+      configs,
+      dependencies,
+      onStateChange: (state) => {
+        setTestState(state)
+
+        // Auto-enable capabilities based on test results
+        if (state.visionTest?.status === 'success') {
+          setCapabilities((prev = []) => (prev.includes('vision') ? prev : [...prev, 'vision']))
+        }
+        if (state.toolTest?.status === 'success') {
+          setCapabilities((prev = []) => (prev.includes('tool_use') ? prev : [...prev, 'tool_use']))
+        }
+      },
+    })
+  }
 
   const handleCancel = () => {
     modal.resolve()
@@ -42,11 +76,10 @@ const ModelEdit = NiceModal.create((props: { model?: ProviderModelInfo }) => {
     modal.resolve({
       modelId,
       type,
-      nickname,
+      nickname: nickname || undefined,
       capabilities,
-      maxTokens,
-      temperature,
-      topP,
+      contextWindow,
+      maxOutput,
     })
     modal.hide()
   }
@@ -101,53 +134,6 @@ const ModelEdit = NiceModal.create((props: { model?: ProviderModelInfo }) => {
           />
         </Stack>
 
-        {/* Chat Model Parameters */}
-        {type === 'chat' && (
-          <>
-            {/* Temperature */}
-            <Stack gap="xs">
-              <Text fw="600">{t('Temperature')}</Text>
-              <NumberInput
-                placeholder={t('Use global default') || 'Use global default'}
-                value={temperature}
-                onChange={(value) => setTemperature(typeof value === 'number' ? value : undefined)}
-                min={0}
-                max={2}
-                step={0.1}
-                decimalScale={1}
-              />
-            </Stack>
-
-            {/* Top P */}
-            <Stack gap="xs">
-              <Text fw="600">Top P</Text>
-              <NumberInput
-                placeholder={t('Use global default') || 'Use global default'}
-                value={topP}
-                onChange={(value) => setTopP(typeof value === 'number' ? value : undefined)}
-                min={0}
-                max={1}
-                step={0.1}
-                decimalScale={1}
-              />
-            </Stack>
-
-            {/* Max Output Tokens */}
-            <Stack gap="xs">
-              <Text fw="600">{t('Max Output Tokens')}</Text>
-              <NumberInput
-                placeholder={t('Use default (4095)') || 'Use default (4095)'}
-                value={maxTokens}
-                onChange={(value) => setMaxTokens(typeof value === 'number' ? value : undefined)}
-                min={1}
-                max={200000}
-                step={1024}
-                allowDecimal={false}
-              />
-            </Stack>
-          </>
-        )}
-
         {/* Capabilities */}
         {type === 'chat' && (
           <Stack gap="xs">
@@ -196,9 +182,56 @@ const ModelEdit = NiceModal.create((props: { model?: ProviderModelInfo }) => {
           </Stack>
         )}
 
+        {/* Context Window and Max Output */}
+        <Stack gap="xs">
+          <Text fw="600">{t('Advanced Settings')}</Text>
+          <Flex gap="md">
+            <Stack gap="xs" flex={1}>
+              <Text size="sm">{t('Context Window')}</Text>
+              <NumberInput
+                placeholder={String(t('e.g. 128000'))}
+                value={contextWindow}
+                onChange={(value) => setContextWindow(typeof value === 'number' ? value : undefined)}
+                min={1}
+                max={10_000_000}
+                step={1000}
+                thousandSeparator=","
+                clampBehavior="strict"
+              />
+            </Stack>
+            <Stack gap="xs" flex={1}>
+              <Text size="sm">{t('Max Output Tokens')}</Text>
+              <NumberInput
+                placeholder={String(t('e.g. 4096'))}
+                value={maxOutput}
+                onChange={(value) => setMaxOutput(typeof value === 'number' ? value : undefined)}
+                min={1}
+                max={1_000_000}
+                step={100}
+                thousandSeparator=","
+                clampBehavior="strict"
+              />
+            </Stack>
+          </Flex>
+        </Stack>
+
         <Flex align="center" justify="flex-end" gap="xs">
+          <Text>
+            {testState.basicTest?.status === 'success' ? (
+              <Text c="chatbox-success">{t('Test successful')}</Text>
+            ) : testState.basicTest?.status === 'error' ? (
+              <Tooltip label={testState.basicTest.error} multiline maw={300}>
+                <Text c="chatbox-error" style={{ cursor: 'help' }}>
+                  {t('Test failed')}
+                </Text>
+              </Tooltip>
+            ) : null}
+          </Text>
           <Button onClick={handleCancel} color="chatbox-gray" variant="light">
             {t('Cancel')}
+          </Button>
+          <Button variant="light" onClick={handleTestModel}>
+            {testState.testing ? <Loader size="xs" /> : t('Test Model')}
           </Button>
           <Button onClick={handleSave}>{t('Save')}</Button>
         </Flex>

@@ -1,6 +1,12 @@
-import { ModelOptionGroup, ModelProvider, ModelProviderEnum, ProviderSettings, SessionType } from 'src/shared/types'
+import {
+  type ModelProvider,
+  ModelProviderEnum,
+  type ProviderModelInfo,
+  type ProviderSettings,
+  type SessionType,
+} from 'src/shared/types'
 import BaseConfig from './base-config'
-import { ModelSettingUtil } from './interface'
+import type { ModelSettingUtil } from './interface'
 
 export default class ChatboxAISettingUtil extends BaseConfig implements ModelSettingUtil {
   public provider: ModelProvider = ModelProviderEnum.ChatboxAI
@@ -21,16 +27,19 @@ export default class ChatboxAISettingUtil extends BaseConfig implements ModelSet
     return []
   }
 
-  protected mergeOptionGroups(localOptionGroups: ModelOptionGroup[], remoteOptionGroups: ModelOptionGroup[]) {
-    const ret = [...remoteOptionGroups, ...localOptionGroups]
-    const existedOptionSet = new Set<string>()
-    for (const group of ret) {
-      group.options = group.options.filter((option) => {
-        const existed = existedOptionSet.has(option.value)
-        existedOptionSet.add(option.value)
-        return !existed
-      })
+  protected mergeOptionGroups(localModels: ProviderModelInfo[], remoteModels: ProviderModelInfo[]) {
+    const modelMap = new Map<string, ProviderModelInfo>()
+
+    // 先添加远程模型
+    for (const model of remoteModels) {
+      modelMap.set(model.modelId, model)
     }
-    return ret.filter((group) => group.options.length > 0)
+
+    // 本地模型覆盖远程模型
+    for (const model of localModels) {
+      modelMap.set(model.modelId, model)
+    }
+
+    return Array.from(modelMap.values())
   }
 }

@@ -1,5 +1,5 @@
-import { getMessageText } from '@/utils/message'
-import { Message } from '../../shared/types'
+import type { Message } from '../../shared/types'
+import { getMessageText } from '../../shared/utils/message'
 
 export function nameConversation(msgs: Message[], language: string): Message[] {
   const format = (msgs: string[]) => msgs.map((msg) => msg).join('\n\n---------\n\n')
@@ -11,7 +11,7 @@ export function nameConversation(msgs: Message[], language: string): Message[] {
         {
           type: 'text',
           text: `Based on the chat history, give this conversation a name.
-Keep it short - 10 characters max, no quotes.
+Keep it short - 10 words max, no quotes.
 Use ${language}.
 Just provide the name, nothing else.
 
@@ -19,7 +19,7 @@ Here's the conversation:
 
 \`\`\`
 ${
-  format(msgs.slice(0, 5).map((msg) => getMessageText(msg).slice(0, 100))) // 限制长度以节省 tokens
+  format(msgs.slice(0, 5).map((msg) => getMessageText(msg, true, false).slice(0, 100))) // 限制长度以节省 tokens
 }
 \`\`\`
 
@@ -94,13 +94,11 @@ You MUST answer with a JSON object that matches the JSON schema above.
 
 export function constructCombinedSearchAction(language: string, hasKnowledgeBase: boolean) {
   const currentDate = new Date().toLocaleDateString()
-  const knowledgeBaseOption = hasKnowledgeBase 
+  const knowledgeBaseOption = hasKnowledgeBase
     ? '2. "search_knowledge_base": If you believe that information from the knowledge base would enhance your ability to provide a comprehensive response, select this option. The knowledge base should be prioritized for relevant content.'
     : ''
-  const actionEnum = hasKnowledgeBase 
-    ? '["search_knowledge_base","search_web","proceed"]'
-    : '["search_web","proceed"]'
-    
+  const actionEnum = hasKnowledgeBase ? '["search_knowledge_base","search_web","proceed"]' : '["search_web","proceed"]'
+
   return `
 As a professional researcher with access to both knowledge base and web search, your primary objective is to fully comprehend the user's query and determine the best search strategy. Keep in mind today's date: ${currentDate}.
         
@@ -143,4 +141,42 @@ Response rules:
 
 Comply with user requests to the best of your abilities. Maintain composure and follow the guidelines.
 `.trim()
+}
+
+export function summarizeConversation(msgs: Message[], language: string): Message[] {
+  const format = (msgs: Message[]) =>
+    msgs.map((msg) => `${msg.role.toUpperCase()}: ${getMessageText(msg, true, false)}`).join('\n\n---------\n\n')
+
+  return [
+    {
+      id: '1',
+      role: 'user',
+      contentParts: [
+        {
+          type: 'text',
+          text: `Create a continuation-ready instruction for a NEW chat thread based on the conversation below.
+
+Requirements:
+- Produce a self-contained brief that lets the assistant continue seamlessly without asking to recap.
+- Explicitly preserve the original directives and constraints under a section named "Retained instructions". If system or user instructions exist, keep them verbatim when short, otherwise condense faithfully.
+- Include these sections, using clear bullet points where helpful:
+  1) Retained instructions (role, goals, constraints, style/tone, formatting rules, tools, safety boundaries)
+  2) Context summary (what has happened so far and why it matters)
+  3) Key decisions and outcomes
+  4) Open questions / TODOs (with owners if known)
+  5) Next reply guidance (what the assistant should do/say next to proceed)
+  6) User preferences (language, style, domain nuances) that should persist
+- Write in ${language}. Keep it concise but complete. Do NOT include prefaces, apologies, or meta-commentary. Do NOT ask follow-up questions just to reconnect.
+
+Here is the conversation to base this on:
+
+\`\`\`
+${format(msgs)}
+\`\`\`
+
+Return only the continuation-ready instruction with the sections above.`,
+        },
+      ],
+    },
+  ]
 }

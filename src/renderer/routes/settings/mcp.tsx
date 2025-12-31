@@ -19,7 +19,7 @@ export const Route = createFileRoute('/settings/mcp')({
   validateSearch: zodValidator(searchSchema),
 })
 
-function RouteComponent() {
+export function RouteComponent() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const searchParams = Route.useSearch()

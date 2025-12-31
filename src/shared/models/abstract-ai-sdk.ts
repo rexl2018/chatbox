@@ -1,17 +1,23 @@
+import type { LanguageModelV2 } from '@ai-sdk/provider'
 import {
   APICallError,
-  type CoreMessage,
-  type CoreSystemMessage,
   type EmbeddingModel,
   type FinishReason,
   experimental_generateImage as generateImage,
-  generateText,
   type ImageModel,
+  type JSONValue,
   type LanguageModelUsage,
-  type LanguageModelV1,
+  type ModelMessage,
   type Provider,
+  simulateStreamingMiddleware,
+  stepCountIs,
   streamText,
+  type TextStreamPart,
   type ToolSet,
+  type TypedToolCall,
+  type TypedToolError,
+  type TypedToolResult,
+  wrapLanguageModel,
 } from 'ai'
 import type {
   MessageContentParts,
@@ -29,33 +35,15 @@ import type { CallChatCompletionOptions, ModelInterface } from './types'
 export interface CallSettings {
   temperature?: number
   topP?: number
-  maxTokens?: number
-  providerOptions?: CoreSystemMessage['providerOptions']
+  maxOutputTokens?: number
+  providerOptions?: Record<string, Record<string, JSONValue>>
 }
 
 interface ToolExecutionResult {
   toolCallId: string
   result: unknown
+  isError?: boolean
 }
-
-interface ToolCallInfo {
-  toolCallId: string
-  toolName: string
-  args: unknown
-}
-
-type KnownStreamChunk =
-  | { type: 'text-delta'; textDelta: string }
-  | { type: 'reasoning'; textDelta: string }
-  | { type: 'reasoning-signature'; signature: string }
-  | { type: 'tool-call'; toolCallId: string; toolName: string; args: unknown }
-  | { type: 'tool-result'; toolCallId: string; result: unknown }
-  | { type: 'file'; mimeType: string; base64: string }
-  | { type: 'error'; error: unknown }
-
-type UnknownStreamChunk = { type: string; [key: string]: unknown }
-
-type StreamChunk = KnownStreamChunk | UnknownStreamChunk
 
 export default abstract class AbstractAISDKModel implements ModelInterface {
   public name = 'AI SDK Model'
@@ -87,7 +75,7 @@ export default abstract class AbstractAISDKModel implements ModelInterface {
     options: CallChatCompletionOptions
   ): Pick<Provider, 'languageModel'> & Partial<Pick<Provider, 'textEmbeddingModel' | 'imageModel'>>
 
-  protected abstract getChatModel(options: CallChatCompletionOptions): LanguageModelV1
+  protected abstract getChatModel(options: CallChatCompletionOptions): LanguageModelV2
 
   protected getImageModel(): ImageModel | null {
     return null
@@ -141,7 +129,7 @@ export default abstract class AbstractAISDKModel implements ModelInterface {
     }
   }
 
-  public async chat(messages: CoreMessage[], options: CallChatCompletionOptions): Promise<StreamTextResult> {
+  public async chat(messages: ModelMessage[], options: CallChatCompletionOptions): Promise<StreamTextResult> {
     try {
       return await this._callChatCompletion(messages, options)
     } catch (e) {
@@ -189,7 +177,7 @@ export default abstract class AbstractAISDKModel implements ModelInterface {
       n: num,
       abortSignal: signal,
     })
-    const dataUrls = result.images.map((image) => `data:${image.mimeType};base64,${image.base64}`)
+    const dataUrls = result.images.map((image) => `data:${image.mediaType};base64,${image.base64}`)
     for (const dataUrl of dataUrls) {
       callback?.(dataUrl)
     }
@@ -220,19 +208,20 @@ export default abstract class AbstractAISDKModel implements ModelInterface {
     options.onResultChange?.({ contentParts })
   }
 
-  private processToolCalls(
-    toolCalls: ToolCallInfo[],
+  private processToolCalls<T extends ToolSet>(
+    toolCalls: TypedToolCall<T>[],
     contentParts: MessageContentParts,
     options: CallChatCompletionOptions
   ): void {
     for (const toolCall of toolCalls) {
+      const args = toolCall.input
       this.addContentPart(
         {
           type: 'tool-call',
           state: 'call',
           toolCallId: toolCall.toolCallId,
           toolName: toolCall.toolName,
-          args: toolCall.args,
+          args,
         },
         contentParts,
         options
@@ -240,13 +229,46 @@ export default abstract class AbstractAISDKModel implements ModelInterface {
     }
   }
 
-  private processToolResults(
-    toolResults: ToolExecutionResult[],
+  private processToolResults<T extends ToolSet>(
+    toolResults: TypedToolResult<T>[],
     contentParts: MessageContentParts,
     options: CallChatCompletionOptions
   ): void {
     for (const toolResult of toolResults) {
-      this.updateToolResultPart(toolResult, contentParts)
+      const result = toolResult.output
+      const mappedResult: ToolExecutionResult = {
+        toolCallId: toolResult.toolCallId,
+        result,
+      }
+      this.updateToolResultPart(mappedResult, contentParts)
+      options.onResultChange?.({ contentParts })
+    }
+  }
+
+  private processToolErrors<T extends ToolSet>(
+    toolErrors: TypedToolError<T>[],
+    contentParts: MessageContentParts,
+    options: CallChatCompletionOptions
+  ): void {
+    for (const toolError of toolErrors) {
+      const serializedError =
+        toolError.error instanceof Error
+          ? {
+              name: toolError.error.name,
+              message: toolError.error.message,
+              stack: toolError.error.stack,
+            }
+          : toolError.error
+      const mappedResult: ToolExecutionResult = {
+        toolCallId: toolError.toolCallId,
+        result: {
+          error: serializedError,
+          input: toolError.input,
+          toolName: toolError.toolName,
+        },
+        isError: true,
+      }
+      this.updateToolResultPart(mappedResult, contentParts)
       options.onResultChange?.({ contentParts })
     }
   }
@@ -257,10 +279,23 @@ export default abstract class AbstractAISDKModel implements ModelInterface {
       | undefined
 
     if (toolCallPart) {
-      if ((toolResult.result as unknown) instanceof Error) {
-        console.debug('mcp tool execute error', toolResult.result)
+      const isError = toolResult.isError || (toolResult.result as unknown) instanceof Error
+      if (isError) {
+        if ((toolResult.result as unknown) instanceof Error) {
+          const error = toolResult.result as Error
+          console.debug('mcp tool execute error', error)
+          toolCallPart.result = {
+            name: error.name,
+            message: error.message,
+            stack: error.stack,
+          }
+        } else {
+          console.debug('mcp tool execute error', toolResult.result)
+          toolCallPart.result = toolResult.result ?? {
+            message: 'Unknown tool error',
+          }
+        }
         toolCallPart.state = 'error'
-        toolCallPart.result = JSON.parse(JSON.stringify(toolResult.result))
       } else {
         toolCallPart.state = 'result'
         toolCallPart.result = toolResult.result
@@ -315,16 +350,6 @@ export default abstract class AbstractAISDKModel implements ModelInterface {
     return currentReasoningPart
   }
 
-  private addToolCallPart(toolCall: ToolCallInfo, contentParts: MessageContentParts): void {
-    contentParts.push({
-      type: 'tool-call',
-      state: 'call',
-      toolCallId: toolCall.toolCallId,
-      toolName: toolCall.toolName,
-      args: toolCall.args,
-    })
-  }
-
   private async processImageFile(
     mimeType: string,
     base64: string,
@@ -335,8 +360,8 @@ export default abstract class AbstractAISDKModel implements ModelInterface {
     contentParts.push({ type: 'image', storageKey })
   }
 
-  private async processStreamChunk(
-    chunk: StreamChunk,
+  private async processStreamChunk<T extends ToolSet>(
+    chunk: TextStreamPart<T>,
     contentParts: MessageContentParts,
     currentTextPart: MessageTextPart | undefined,
     currentReasoningPart: MessageReasoningPart | undefined,
@@ -345,73 +370,64 @@ export default abstract class AbstractAISDKModel implements ModelInterface {
     currentTextPart: MessageTextPart | undefined
     currentReasoningPart: MessageReasoningPart | undefined
   }> {
-    // Process different chunk types using a type-safe switch statement
-    const knownTypes = [
-      'text-delta',
-      'reasoning',
-      'reasoning-signature',
-      'tool-call',
-      'tool-result',
-      'file',
-      'error',
-    ] as const
-
-    if (!knownTypes.includes(chunk.type as (typeof knownTypes)[number])) {
-      // Handle unknown chunk types - just log them
-      console.debug('Unknown chunk type:', chunk.type, chunk)
-      return { currentTextPart, currentReasoningPart }
+    // Finalize reasoning duration when transitioning to other content types
+    const finalizeReasoningDuration = () => {
+      if (currentReasoningPart?.startTime && !currentReasoningPart.duration) {
+        currentReasoningPart.duration = Date.now() - currentReasoningPart.startTime
+      }
     }
 
-    const knownChunk = chunk as KnownStreamChunk
-    switch (knownChunk.type) {
-      case 'text-delta': {
-        // Critical timing logic: When we receive the first text chunk, the thinking phase has ended.
-        // We must capture the thinking duration at this exact moment to ensure the timer
-        // shows only the thinking time, not the total response generation time.
-        if (currentReasoningPart?.startTime && !currentReasoningPart.duration) {
-          currentReasoningPart.duration = Date.now() - currentReasoningPart.startTime
+    switch (chunk.type) {
+      case 'text-delta':
+        finalizeReasoningDuration()
+        // clear current reasoning part
+        return {
+          currentTextPart: this.createOrUpdateTextPart(chunk.text, contentParts, currentTextPart),
+          currentReasoningPart: undefined,
         }
-        currentReasoningPart = undefined
-        currentTextPart = this.createOrUpdateTextPart(knownChunk.textDelta, contentParts, currentTextPart)
-        break
-      }
-      case 'reasoning': {
+
+      case 'reasoning-delta':
         // 部分提供方会随文本返回空的reasoning，防止分割正常的content
-        if (knownChunk.textDelta.trim() === '') {
-          break
-        }
-        currentTextPart = undefined
-        currentReasoningPart = this.createOrUpdateReasoningPart(
-          knownChunk.textDelta,
-          contentParts,
-          currentReasoningPart
-        )
-        break
-      }
-      case 'tool-call': {
-        // Similar to text-delta: when tool calls begin, thinking has ended.
-        // Capture the thinking duration before processing tool calls.
-        if (currentReasoningPart?.startTime && !currentReasoningPart.duration) {
-          currentReasoningPart.duration = Date.now() - currentReasoningPart.startTime
-        }
-        currentTextPart = undefined
-        this.addToolCallPart(knownChunk, contentParts)
-        break
-      }
-      case 'tool-result': {
-        this.updateToolResultPart(knownChunk, contentParts)
-        break
-      }
-      case 'file': {
-        if (knownChunk.mimeType.startsWith('image/')) {
-          currentTextPart = undefined
-          await this.processImageFile(knownChunk.mimeType, knownChunk.base64, contentParts)
+        if (chunk.text.trim()) {
+          return {
+            currentTextPart: undefined,
+            currentReasoningPart: this.createOrUpdateReasoningPart(chunk.text, contentParts, currentReasoningPart),
+          }
         }
         break
-      }
-      case 'error': {
-        this.handleStreamError(knownChunk)
-      }
+
+      case 'tool-call':
+        finalizeReasoningDuration()
+        this.processToolCalls([chunk], contentParts, _options)
+        return {
+          currentTextPart: undefined,
+          currentReasoningPart: undefined,
+        }
+
+      case 'tool-result':
+        this.processToolResults([chunk], contentParts, _options)
+        break
+      case 'tool-error':
+        finalizeReasoningDuration()
+        this.processToolErrors([chunk], contentParts, _options)
+        break
+
+      case 'file':
+        if (chunk.file.mediaType?.startsWith('image/') && chunk.file.base64) {
+          await this.processImageFile(chunk.file.mediaType, chunk.file.base64, contentParts)
+          return {
+            currentTextPart: undefined,
+            currentReasoningPart: undefined,
+          }
+        }
+        break
+      case 'error':
+        this.handleError(chunk.error)
+        break
+      case 'finish':
+        break
+      default:
+        break
     }
 
     return { currentTextPart, currentReasoningPart }
@@ -428,10 +444,6 @@ export default abstract class AbstractAISDKModel implements ModelInterface {
       throw error
     }
     throw new ApiError(`Error from ${this.name}${context}: ${error}`)
-  }
-
-  private handleStreamError(chunk: { type: 'error'; error: unknown }): never {
-    this.handleError(chunk.error)
   }
 
   /**
@@ -462,78 +474,22 @@ export default abstract class AbstractAISDKModel implements ModelInterface {
 
     options.onResultChange?.({
       contentParts,
-      tokenCount: result.usage?.completionTokens,
+      tokenCount: result.usage?.outputTokens,
       tokensUsed: result.usage?.totalTokens,
     })
     return { contentParts, usage: result.usage, finishReason: result.finishReason }
   }
 
-  private async handleNonStreamingCompletion<T extends ToolSet>(
-    model: LanguageModelV1,
-    coreMessages: CoreMessage[],
-    options: CallChatCompletionOptions<T>,
-    callSettings: CallSettings
-  ): Promise<StreamTextResult> {
-    const contentParts: MessageContentParts = []
-
-    try {
-      const result = await generateText({
-        model,
-        messages: coreMessages,
-        maxSteps: Number.MAX_SAFE_INTEGER,
-        tools: options.tools,
-        abortSignal: options.signal,
-        onStepFinish: async (event) => {
-          // Process reasoning content
-          if (event.reasoning) {
-            this.addContentPart({ type: 'reasoning', text: event.reasoning }, contentParts, options)
-          }
-
-          // Process text in this step
-          if (event.text) {
-            this.addContentPart({ type: 'text', text: event.text }, contentParts, options)
-          }
-
-          // Process tool calls in this step
-          if (event.toolCalls && event.toolCalls.length > 0) {
-            this.processToolCalls(event.toolCalls, contentParts, options)
-          }
-
-          // Process tool results in this step
-          if (event.toolResults && event.toolResults.length > 0) {
-            this.processToolResults(event.toolResults, contentParts, options)
-          }
-
-          // Process files/images
-          if (event.files && event.files.length > 0) {
-            for (const file of event.files) {
-              if (file.mimeType?.startsWith('image/') && file.base64) {
-                await this.processImageFile(file.mimeType, file.base64, contentParts)
-                options.onResultChange?.({ contentParts })
-              }
-            }
-          }
-        },
-        ...callSettings,
-      })
-
-      return this.finalizeResult(contentParts, result, options)
-    } catch (error) {
-      // Handle errors consistently with streaming mode
-      this.handleError(error)
-    }
-  }
-
   private async handleStreamingCompletion<T extends ToolSet>(
-    model: LanguageModelV1,
-    coreMessages: CoreMessage[],
+    model: LanguageModelV2,
+    coreMessages: ModelMessage[],
     options: CallChatCompletionOptions<T>,
     callSettings: CallSettings
   ): Promise<StreamTextResult> {
     const result = streamText({
       model,
       messages: coreMessages,
-      maxSteps: Number.MAX_SAFE_INTEGER,
+      stopWhen: stepCountIs(options.maxSteps || Number.MAX_SAFE_INTEGER),
       tools: options.tools,
       abortSignal: options.signal,
       // experimental_transform: smoothStream({
@@ -549,7 +505,13 @@ export default abstract class AbstractAISDKModel implements ModelInterface {
 
     try {
       for await (const chunk of result.fullStream) {
-        console.debug('stream chunk', chunk)
+        // console.debug('stream chunk', chunk)
+
+        // Handle error chunks
+        if (chunk.type === 'error') {
+          this.handleError(chunk.error)
+        }
+
         const chunkResult = await this.processStreamChunk(
           chunk,
           contentParts,
@@ -560,9 +522,7 @@ export default abstract class AbstractAISDKModel implements ModelInterface {
         currentTextPart = chunkResult.currentTextPart
         currentReasoningPart = chunkResult.currentReasoningPart
 
-        if (chunk.type !== 'error') {
-          options.onResultChange?.({ contentParts })
-        }
+        options.onResultChange?.({ contentParts })
       }
     } catch (error) {
       // Ensure reasoning parts get their duration set even if streaming is interrupted
@@ -575,7 +535,7 @@ export default abstract class AbstractAISDKModel implements ModelInterface {
     return this.finalizeResult(
       contentParts,
       {
-        usage: await result.usage,
+        usage: await result.totalUsage,
         finishReason: await result.finishReason,
       },
       options
@@ -583,16 +543,19 @@ export default abstract class AbstractAISDKModel implements ModelInterface {
   }
 
   private async _callChatCompletion<T extends ToolSet>(
-    coreMessages: CoreMessage[],
+    coreMessages: ModelMessage[],
     options: CallChatCompletionOptions<T>
   ): Promise<StreamTextResult> {
-    const model = this.getChatModel(options)
+    let model = this.getChatModel(options)
     const callSettings = this.getCallSettings(options)
 
     if (this.options.stream === false) {
-      return this.handleNonStreamingCompletion(model, coreMessages, options, callSettings)
+      model = wrapLanguageModel({
+        model,
+        middleware: simulateStreamingMiddleware(),
+      })
     }
 
-    return this.handleStreamingCompletion(model, coreMessages, options, callSettings)
+    return await this.handleStreamingCompletion(model, coreMessages, options, callSettings)
   }
 }

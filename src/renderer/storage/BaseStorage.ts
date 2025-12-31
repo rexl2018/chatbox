@@ -3,6 +3,10 @@ import platform from '@/platform'
 export default class BaseStorage {
   constructor() {}
 
+  public getStorageType() {
+    return platform.getStorageType()
+  }
+
   public async setItem<T>(key: string, value: T): Promise<void> {
     return this.setItemNow(key, value)
   }

@@ -16,23 +16,25 @@ import {
 import { IconInfoCircle } from '@tabler/icons-react'
 import { createFileRoute } from '@tanstack/react-router'
 import { mapValues, uniqBy } from 'lodash'
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { type Language, type ProviderInfo, type Settings, Theme } from 'src/shared/types'
+import { formatFileSize } from 'src/shared/utils'
 import LazySlider from '@/components/LazySlider'
-import { useSettings } from '@/hooks/useSettings'
 import { languageNameMap, languages } from '@/i18n/locales'
 import platform from '@/platform'
 import storage, { StorageKey } from '@/storage'
+import { recoverSessionList } from '@/stores/chatStore'
 import { migrateOnData } from '@/stores/migration'
+import { useSettingsStore } from '@/stores/settingsStore'
 
 export const Route = createFileRoute('/settings/general')({
   component: RouteComponent,
 })
 
-function RouteComponent() {
+export function RouteComponent() {
   const { t } = useTranslation()
-  const { settings, setSettings } = useSettings()
+  const { setSettings, ...settings } = useSettingsStore((state) => state)
 
   return (
     <Stack p="md" gap="xl">
@@ -149,6 +151,11 @@ function RouteComponent() {
 
       <Divider />
 
+      {/* Data Recovery */}
+      <DataRecoverySection />
+
+      <Divider />
+
       {/* import and export data */}
       <ImportExportDataSection />
 
@@ -212,6 +219,75 @@ function RouteComponent() {
   )
 }
 
+const DataRecoverySection = () => {
+  const { t } = useTranslation()
+  const [isRecovering, setIsRecovering] = useState(false)
+  const [recoveryResult, setRecoveryResult] = useState<{
+    success: boolean
+    recovered?: number
+    failed?: number
+    error?: string
+  } | null>(null)
+
+  const handleRecover = async () => {
+    setIsRecovering(true)
+    setRecoveryResult(null)
+    try {
+      const result = await recoverSessionList()
+      setRecoveryResult({ success: true, recovered: result.recovered, failed: result.failed })
+    } catch (error) {
+      console.error('Failed to recover session list:', error)
+      setRecoveryResult({ success: false, error: String(error) })
+    } finally {
+      setIsRecovering(false)
+    }
+  }
+
+  const hasPartialFailure = recoveryResult?.success && recoveryResult.failed && recoveryResult.failed > 0
+
+  return (
+    <Stack gap="md">
+      <Stack gap="xxs">
+        <Title order={5}>{t('Data Recovery')}</Title>
+        <Text c="chatbox-tertiary">
+          {t('If conversations are missing from the list, use this feature to scan and recover them from storage')}
+        </Text>
+      </Stack>
+      <Button className="self-start" onClick={handleRecover} disabled={isRecovering} loading={isRecovering}>
+        {isRecovering ? t('Recovering...') : t('Recover Conversation List')}
+      </Button>
+      {recoveryResult && (
+        <Alert
+          className="self-start"
+          variant="light"
+          color={recoveryResult.success ? (hasPartialFailure ? 'yellow' : 'green') : 'red'}
+          title={
+            recoveryResult.success
+              ? t('Recovered {{count}} conversations', { count: recoveryResult.recovered })
+              : t('Recovery failed')
+          }
+          icon={<IconInfoCircle />}
+        >
+          {recoveryResult.success ? (
+            <Stack gap="xs">
+              <Text size="sm">{t('The conversation list has been successfully recovered')}</Text>
+              {hasPartialFailure && (
+                <Text size="sm" c="orange">
+                  {t('{{count}} conversations could not be recovered due to data read errors', {
+                    count: recoveryResult.failed,
+                  })}
+                </Text>
+              )}
+            </Stack>
+          ) : (
+            <Text size="sm">{recoveryResult.error || t('Unknown error')}</Text>
+          )}
+        </Alert>
+      )}
+    </Stack>
+  )
+}
+
 const ImportExportDataSection = () => {
   const { t } = useTranslation()
 
@@ -260,7 +336,7 @@ const ImportExportDataSection = () => {
     }
     const reader = new FileReader()
     reader.onload = (event) => {
-      ;(async () => {
+      void (async () => {
         setImportTips('')
         try {
           const result = event.target?.result
@@ -271,33 +347,42 @@ const ImportExportDataSection = () => {
           // 如果导入数据中包含了老的版本号，应该仅仅针对老的版本号进行迁移
           await migrateOnData(
             {
-              getData: async (key, defaultValue) => {
-                return importData[key] || defaultValue
-              },
-              setData: async (key, value) => {
+              getData: (key, defaultValue) => Promise.resolve(importData[key] ?? defaultValue),
+              setData: (key, value) => {
                 importData[key] = value
+                return Promise.resolve()
               },
-              setAll: async (data) => {
+              setAll: (data) => {
                 Object.assign(importData, data)
+                return Promise.resolve()
               },
             },
             false
           )
 
-          const previousData = await storage.getAll()
-          // FIXME: 这里缺少了数据校验
-          await storage.setAll({
-            ...previousData, // 有时候 importData 在导出时没有包含一些数据，这些数据应该保持原样
-            ...importData,
-            [StorageKey.ChatSessionsList]: uniqBy(
-              [
-                ...(previousData[StorageKey.ChatSessionsList] || []),
-                ...(importData[StorageKey.ChatSessionsList] || []),
-              ],
-              'id'
-            ),
-          })
-          // props.onCancel() // 导出成功后立即关闭设置窗口，防止用户点击保存、导致设置数据被覆盖
+          const entriesToImport = Object.entries(importData).filter(
+            ([key]) => key !== StorageKey.ChatSessionsList && key !== StorageKey.ConfigVersion && !key.startsWith('__')
+          )
+
+          const importedChatSessions = Array.isArray(importData[StorageKey.ChatSessionsList])
+            ? importData[StorageKey.ChatSessionsList]
+            : undefined
+
+          for (const [key, value] of entriesToImport) {
+            await storage.setItemNow(key, value)
+          }
+
+          if (importedChatSessions) {
+            const previousChatSessions = await storage.getItem(StorageKey.ChatSessionsList, [])
+
+            await storage.setItemNow(
+              StorageKey.ChatSessionsList,
+              uniqBy([...previousChatSessions, ...importedChatSessions], 'id')
+            )
+          }
+
+          // 由于即将重启应用，这里不需要清理loading状态
+          // props.onCancel() // 导入成功后立即关闭设置窗口，防止用户点击保存、导致设置数据被覆盖
           platform.relaunch() // 重启应用以生效
         } catch (err) {
           setImportTips(errTip)
@@ -317,10 +402,32 @@ const ImportExportDataSection = () => {
     reader.readAsText(file)
   }
 
+  const [showStorageInfo, setShowStorageInfo] = useState(false)
+  const [storagePersisted, setStoragePersisted] = useState<boolean>()
+  const [storageEstimate, setStorageEstimate] = useState<StorageEstimate>()
+  const storageInfo = useMemo(
+    () =>
+      `Storage persisted: ${storagePersisted}; Storage Estimate: { quota: ${formatFileSize(storageEstimate?.quota || 0)}, usage: ${formatFileSize(storageEstimate?.usage || 0)} }`,
+    [storagePersisted, storageEstimate]
+  )
+  useEffect(() => {
+    if (window?.navigator?.storage) {
+      window.navigator.storage.estimate?.().then((res) => setStorageEstimate(res))
+      window.navigator.storage.persisted?.().then((p) => setStoragePersisted(p))
+    }
+  }, [])
+
   return (
     <>
       <Stack gap="md">
-        <Title order={5}>{t('Data Backup')}</Title>
+        <Title order={5} onDoubleClick={() => setShowStorageInfo(true)}>
+          {t('Data Backup')}
+        </Title>
+        {showStorageInfo && (
+          <Text size="xs" c="chatbox-tertiary">
+            {storageInfo}
+          </Text>
+        )}
         {[
           { label: t('Settings'), value: ExportDataItem.Setting },
           { label: t('API KEY & License'), value: ExportDataItem.Key },

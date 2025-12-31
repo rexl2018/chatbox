@@ -1,13 +1,15 @@
-import { useMCPServerStatus, useToggleMCPServer } from '@/hooks/mcp'
-import { useSettings } from '@/hooks/useSettings'
-import { BUILTIN_MCP_SERVERS } from '@/packages/mcp/builtin'
-import { Button, Flex, Group, Menu, Switch, Text } from '@mantine/core'
-import { Link } from '@tanstack/react-router'
+import { ActionIcon, Button, Flex, Group, Menu, Switch } from '@mantine/core'
 import { IconSettings2 } from '@tabler/icons-react'
-import { FC, ReactNode } from 'react'
-import MCPStatus from './MCPStatus'
-import { useAutoValidate } from '@/stores/premiumActions'
+import { Link } from '@tanstack/react-router'
+import { type FC, type ReactNode, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useMCPServerStatus, useToggleMCPServer } from '@/hooks/mcp'
+import { navigateToSettings } from '@/modals/Settings'
+import { BUILTIN_MCP_SERVERS } from '@/packages/mcp/builtin'
+import { useAutoValidate } from '@/stores/premiumActions'
+import { useMcpSettings } from '@/stores/settingsStore'
+import { ScalableIcon } from '../ScalableIcon'
+import MCPStatus from './MCPStatus'
 
 interface ServerItem {
   id: string
@@ -40,31 +42,43 @@ const ServerItem: FC<{
 
 const MCPMenu: FC<{ children: (enabledTools: number) => ReactNode }> = ({ children }) => {
   const { t } = useTranslation()
-  const { settings } = useSettings()
+  const mcp = useMcpSettings()
   const isPremium = useAutoValidate()
   const onEnabledChange = useToggleMCPServer()
-  const enabledToolsCount =
-    settings.mcp.servers.filter((s) => s.enabled).length + settings.mcp.enabledBuiltinServers.length
+  const enabledToolsCount = mcp.servers.filter((s) => s.enabled).length + mcp.enabledBuiltinServers.length
+  const [opened, setOpened] = useState(false)
   return (
     <Menu
+      trigger="hover"
+      openDelay={100}
+      closeDelay={100}
+      opened={opened}
+      onChange={setOpened}
       shadow="md"
       withArrow
       width={240}
       closeOnItemClick={false}
-      position="top"
+      position="top-start"
       transitionProps={{
-        transition: 'fade-up',
-        duration: 300,
+        transition: 'pop',
+        duration: 200,
       }}
     >
       <Menu.Target>{children(enabledToolsCount)}</Menu.Target>
       <Menu.Dropdown>
-        <Flex justify="space-between">
+        <Flex justify="space-between" align="center">
           <Menu.Label fw={600}>MCP</Menu.Label>
           <Menu.Label>
-            <Link to="/settings/mcp">
-              <IconSettings2 size={16} color="var(--mantine-color-chatbox-tertiary-text)" />
-            </Link>
+            <ActionIcon
+              variant="subtle"
+              size={20}
+              onClick={() => {
+                setOpened(false)
+                navigateToSettings('/mcp')
+              }}
+            >
+              <ScalableIcon icon={IconSettings2} size={16} color="var(--chatbox-tint-tertiary)" />
+            </ActionIcon>
           </Menu.Label>
         </Flex>
         {isPremium && (
@@ -75,7 +89,7 @@ const MCPMenu: FC<{ children: (enabledTools: number) => ReactNode }> = ({ childr
                 item={{
                   id: server.id,
                   name: server.name,
-                  enabled: settings.mcp.enabledBuiltinServers.includes(server.id),
+                  enabled: mcp.enabledBuiltinServers.includes(server.id),
                 }}
                 onEnabledChange={onEnabledChange}
               />
@@ -83,10 +97,10 @@ const MCPMenu: FC<{ children: (enabledTools: number) => ReactNode }> = ({ childr
             <Menu.Divider />
           </>
         )}
-        {settings.mcp.servers.map((server) => (
+        {mcp.servers.map((server) => (
           <ServerItem key={server.id} item={server} onEnabledChange={onEnabledChange} />
         ))}
-        {!settings.mcp.servers.length && !settings.mcp.enabledBuiltinServers.length && (
+        {!mcp.servers.length && !mcp.enabledBuiltinServers.length && (
           <Group justify="center">
             <Link to="/settings/mcp">
               <Button size="xs" my={12} variant="outline">

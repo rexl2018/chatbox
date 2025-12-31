@@ -1,6 +1,5 @@
-import { getDefaultStore } from 'jotai'
 import { useEffect } from 'react'
-import { settingsAtom } from '../stores/atoms'
+import { settingsStore } from '@/stores/settingsStore'
 import platform from '../platform'
 
 export function useSystemLanguageWhenInit() {
@@ -8,9 +7,8 @@ export function useSystemLanguageWhenInit() {
     // 通过定时器延迟启动，防止处理状态底层存储的异步加载前错误的初始数据
     setTimeout(() => {
       ;(async () => {
-        const store = getDefaultStore()
-        const settings = store.get(settingsAtom)
-        if (!settings.languageInited) {
+        const { languageInited } = settingsStore.getState()
+        if (!languageInited) {
           let locale = await platform.getLocale()
 
           // 网页版暂时不自动更改简体中文，防止网址封禁
@@ -20,10 +18,14 @@ export function useSystemLanguageWhenInit() {
             }
           }
 
-          settings.language = locale
+          settingsStore.setState({
+            language: locale,
+            languageInited: true,
+          })
         }
-        settings.languageInited = true
-        store.set(settingsAtom, { ...settings })
+        settingsStore.setState({
+          languageInited: true,
+        })
       })()
     }, 2000)
   }, [])

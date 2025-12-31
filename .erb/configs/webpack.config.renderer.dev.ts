@@ -1,17 +1,17 @@
 import 'webpack-dev-server'
-import path from 'path'
-import fs from 'fs'
-import webpack from 'webpack'
-import HtmlWebpackPlugin from 'html-webpack-plugin'
-import chalk from 'chalk'
-import { merge } from 'webpack-merge'
-import { execSync, spawn } from 'child_process'
 import ReactRefreshWebpackPlugin from '@pmmmwh/react-refresh-webpack-plugin'
+import { TanStackRouterWebpack } from '@tanstack/router-plugin/webpack'
+import chalk from 'chalk'
+import { spawn } from 'child_process'
+import fs from 'fs'
+import HtmlWebpackPlugin from 'html-webpack-plugin'
+import path from 'path'
+import webpack from 'webpack'
 import { BundleAnalyzerPlugin } from 'webpack-bundle-analyzer'
+import { merge } from 'webpack-merge'
+import checkNodeEnv from '../scripts/check-node-env.js'
 import baseConfig from './webpack.config.base.ts'
 import webpackPaths from './webpack.paths.ts'
-import checkNodeEnv from '../scripts/check-node-env.js';
-import { TanStackRouterWebpack } from '@tanstack/router-plugin/webpack';
 
 // When an ESLint server is running, we can't set the NODE_ENV so we'll check if it's
 // at the dev webpack config is not accidentally run in a production environment
@@ -82,7 +82,13 @@ const configuration: webpack.Configuration = {
         use: [
           'style-loader',
           'css-loader',
-          'sass-loader',
+          {
+            loader: 'string-replace-loader',
+            options: {
+              search: /(\d+)dvh/g,
+              replace: '$1vh',
+            },
+          },
           {
             loader: 'postcss-loader',
             options: {
@@ -93,19 +99,23 @@ const configuration: webpack.Configuration = {
                   'tailwindcss',
                   'autoprefixer',
                   'postcss-preset-mantine',
-                  ['postcss-simple-vars', {
-                    variables: {
-                      'mantine-breakpoint-xs': '36em',
-                      'mantine-breakpoint-sm': '48em',
-                      'mantine-breakpoint-md': '62em',
-                      'mantine-breakpoint-lg': '75em',
-                      'mantine-breakpoint-xl': '88em',
+                  [
+                    'postcss-simple-vars',
+                    {
+                      variables: {
+                        'mantine-breakpoint-xs': '36em',
+                        'mantine-breakpoint-sm': '48em',
+                        'mantine-breakpoint-md': '62em',
+                        'mantine-breakpoint-lg': '75em',
+                        'mantine-breakpoint-xl': '88em',
+                      },
                     },
-                  }],
+                  ],
                 ],
               },
             },
           },
+          'sass-loader',
         ],
         exclude: /\.module\.s?(c|a)ss$/,
         sideEffects: true,

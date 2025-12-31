@@ -1,9 +1,10 @@
 import { Avatar } from '@mantine/core'
-import { Spotlight, SpotlightActionData, SpotlightActionGroupData } from '@mantine/spotlight'
+import { Spotlight, type SpotlightActionData, type SpotlightActionGroupData } from '@mantine/spotlight'
 import { IconJson, IconSearch, IconSquareRoundedPlusFilled } from '@tabler/icons-react'
-import { FC, useMemo } from 'react'
+import { type FC, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { MCP_ENTRIES_COMMUNITY, MCP_ENTRIES_OFFICIAL, MCPRegistryEntry } from './registries'
+import { ScalableIcon } from '@/components/ScalableIcon'
+import { MCP_ENTRIES_COMMUNITY, MCP_ENTRIES_OFFICIAL, type MCPRegistryEntry } from './registries'
 
 const ServerRegistrySpotlight: FC<{
   triggerAddServer: (entry?: MCPRegistryEntry) => void
@@ -21,7 +22,7 @@ const ServerRegistrySpotlight: FC<{
             description: t('Configure MCP server manually')!,
             onClick: () => props.triggerAddServer(),
             leftSection: (
-              <IconSquareRoundedPlusFilled size={24} className="text-[var(--mantine-color-chatbox-brand-text)]" />
+              <ScalableIcon icon={IconSquareRoundedPlusFilled} size={24} className="text-chatbox-tint-brand" />
             ),
           },
           {
@@ -29,7 +30,7 @@ const ServerRegistrySpotlight: FC<{
             label: t('Import from JSON in clipboard')!,
             description: t('Import MCP servers from JSON in your clipboard')!,
             onClick: () => props.triggerImportJson(),
-            leftSection: <IconJson size={24} className="text-[var(--mantine-color-chatbox-brand-text)]" />,
+            leftSection: <ScalableIcon icon={IconJson} size={24} className="text-chatbox-tint-brand" />,
           },
         ],
       },
@@ -63,7 +64,7 @@ const ServerRegistrySpotlight: FC<{
       maxHeight={600}
       shortcut={null}
       searchProps={{
-        leftSection: <IconSearch size={20} stroke={1.5} />,
+        leftSection: <ScalableIcon icon={IconSearch} size={20} stroke={1.5} />,
         placeholder: t('Search...')!,
       }}
     />

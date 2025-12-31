@@ -1,13 +1,12 @@
-import { uniqBy } from 'lodash'
 import { useCallback, useMemo } from 'react'
 import { SystemProviders } from 'src/shared/defaults'
 import { ModelProviderEnum, type ProviderInfo } from 'src/shared/types'
+import { useSettingsStore } from '@/stores/settingsStore'
 import useChatboxAIModels from './useChatboxAIModels'
-import { useSettings } from './useSettings'
 
 export const useProviders = () => {
   const { chatboxAIModels } = useChatboxAIModels()
-  const { settings, setSettings } = useSettings()
+  const { setSettings, ...settings } = useSettingsStore((state) => state)
   const providerSettingsMap = settings.providers
 
   const allProviderBaseInfos = useMemo(

@@ -3,21 +3,24 @@ import { extractReasoningMiddleware, wrapLanguageModel } from 'ai'
 import type { ProviderModelInfo } from 'src/shared/types'
 import type { ModelDependencies } from 'src/shared/types/adapters'
 import AbstractAISDKModel from './abstract-ai-sdk'
-import { fetchRemoteModels } from './utils/fetch-proxy'
+import { fetchRemoteModels } from './openai-compatible'
 
 interface Options {
   apiKey: string
   model: ProviderModelInfo
   temperature?: number
   topP?: number
-  maxTokens?: number
+  maxOutputTokens?: number
   stream?: boolean
 }
 
 export default class MistralAI extends AbstractAISDKModel {
   public name = 'MistralAI'
 
-  constructor(public options: Options, dependencies: ModelDependencies) {
+  constructor(
+    public options: Options,
+    dependencies: ModelDependencies
+  ) {
     super(options, dependencies)
   }
 
@@ -25,11 +28,11 @@ export default class MistralAI extends AbstractAISDKModel {
     return {
       temperature: this.options.temperature,
       topP: this.options.topP,
-      maxTokens: this.options.maxTokens,
+      maxOutputTokens: this.options.maxOutputTokens,
       providerOptions: {
         mistral: {
-          documentImageLimit: 8, 
-          documentPageLimit: 64,  
+          documentImageLimit: 8,
+          documentPageLimit: 64,
         },
       },
     }
@@ -44,7 +47,7 @@ export default class MistralAI extends AbstractAISDKModel {
       apiKey: this.options.apiKey,
       baseURL: 'https://api.mistral.ai/v1',
     })
-    
+
     return {
       languageModel: mistral,
       textEmbeddingModel: mistral.textEmbedding,
@@ -58,7 +61,8 @@ export default class MistralAI extends AbstractAISDKModel {
       middleware: extractReasoningMiddleware({ tagName: 'think' }),
     })
   }
-  public async listModels(): Promise<string[]> {
+
+  public async listModels(): Promise<ProviderModelInfo[]> {
     return fetchRemoteModels(
       {
         apiHost: 'https://api.mistral.ai/v1',

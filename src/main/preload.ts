@@ -30,6 +30,10 @@ const electronHandler: ElectronIPC = {
     ipcRenderer.on('system-theme-updated', callback)
     return () => ipcRenderer.off('system-theme-updated', callback)
   },
+  onWindowMaximizedChanged: (callback: (_: Electron.IpcRendererEvent, windowMaximized: boolean) => void) => {
+    ipcRenderer.on('window:maximized-changed', callback)
+    return () => ipcRenderer.off('window:maximized-changed', callback)
+  },
   onWindowShow: (callback: () => void) => {
     ipcRenderer.on('window-show', callback)
     return () => ipcRenderer.off('window-show', callback)

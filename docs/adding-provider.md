@@ -82,17 +82,23 @@ Add your provider configuration to the `SystemProviders` array:
 
 ```typescript
 {
-  provider: ModelProviderEnum.YourProvider,
+  id: ModelProviderEnum.YourProvider,
   name: 'Your Provider',
-  apiHost: 'https://api.yourprovider.com',
-  chatModels: [
-    { name: 'model-1', functionCall: false },
-    { name: 'model-2', functionCall: true },
-  ],
-  supportContinuous: true,
-  supportEmbedding: false,
+  type: ModelProviderType.OpenAI,  // OpenAI | Gemini | Claude
+  defaultSettings: {
+    apiHost: 'https://api.yourprovider.com',
+    models: [
+      {
+        modelId: 'model-1',
+        capabilities: ['vision', 'tool_use'],  // optional
+        contextWindow: 128_000,  // optional
+      },
+    ],
+  },
 }
 ```
+
+**Note:** See existing providers in `defaults.ts` for more examples.
 
 ### 5. Create Settings Utility
 

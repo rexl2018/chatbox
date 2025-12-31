@@ -1,274 +1,246 @@
-import AddIcon from '@mui/icons-material/AddCircleOutline'
-import AddPhotoAlternateIcon from '@mui/icons-material/AddPhotoAlternate'
-import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
-import SettingsIcon from '@mui/icons-material/Settings'
-import SmartToyIcon from '@mui/icons-material/SmartToy'
-import {
-  Box,
-  Button,
-  Divider,
-  IconButton,
-  ListItemIcon,
-  ListItemText,
-  MenuItem,
-  MenuList,
-  Stack,
-  Typography,
-  useTheme,
-} from '@mui/material'
+import { ActionIcon, Box, Button, Divider, Flex, Image, NavLink, Stack, Text, Tooltip } from '@mantine/core'
 import SwipeableDrawer from '@mui/material/SwipeableDrawer'
-import { useNavigate, useRouterState } from '@tanstack/react-router'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { PanelLeftClose } from 'lucide-react'
-import { useCallback, useEffect, useRef } from 'react'
+import {
+  IconCirclePlus,
+  IconCode,
+  IconInfoCircle,
+  IconLayoutSidebarLeftCollapse,
+  IconMessageChatbot,
+  IconPhotoPlus,
+  IconSettingsFilled,
+} from '@tabler/icons-react'
+import { useNavigate } from '@tanstack/react-router'
+import clsx from 'clsx'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import ThemeSwitchButton from './components/dev/ThemeSwitchButton'
+import { ScalableIcon } from './components/ScalableIcon'
 import SessionList from './components/SessionList'
+import { FORCE_ENABLE_DEV_PAGES } from './dev/devToolsConfig'
 import useNeedRoomForMacWinControls from './hooks/useNeedRoomForWinControls'
 import { useIsSmallScreen, useSidebarWidth } from './hooks/useScreenChange'
 import useVersion from './hooks/useVersion'
-import { cn } from './lib/utils'
+import { navigateToSettings } from './modals/Settings'
 import { trackingEvent } from './packages/event'
 import icon from './static/icon.png'
-import * as atoms from './stores/atoms'
-import * as sessionActions from './stores/sessionActions'
+import { createEmpty } from './stores/sessionActions'
+import { useLanguage } from './stores/settingsStore'
+import { useUIStore } from './stores/uiStore'
 import { CHATBOX_BUILD_PLATFORM } from './variables'
 
 export default function Sidebar() {
-  const language = useAtomValue(atoms.languageAtom)
-  const [showSidebar, setShowSidebar] = useAtom(atoms.showSidebarAtom)
+  const { t } = useTranslation()
+  const versionHook = useVersion()
+  const language = useLanguage()
+  const navigate = useNavigate()
+  const showSidebar = useUIStore((s) => s.showSidebar)
+  const setShowSidebar = useUIStore((s) => s.setShowSidebar)
+  const setSidebarWidth = useUIStore((s) => s.setSidebarWidth)
 
-  const sessionListRef = useRef<HTMLDivElement>(null)
+  const sessionListViewportRef = useRef<HTMLDivElement>(null)
 
   const sidebarWidth = useSidebarWidth()
 
-  // 小屏幕切换会话时隐藏侧边栏
   const isSmallScreen = useIsSmallScreen()
-  useEffect(() => {
-    if (isSmallScreen) {
-      setShowSidebar(false)
-    }
-  }, [isSmallScreen, setShowSidebar])
 
-  const theme = useTheme()
+  const [isResizing, setIsResizing] = useState(false)
+  const resizeStartX = useRef<number>(0)
+  const resizeStartWidth = useRef<number>(0)
 
   const { needRoomForMacWindowControls } = useNeedRoomForMacWinControls()
 
-  return (
-    <div>
-      <SwipeableDrawer
-        anchor={language === 'ar' ? 'right' : 'left'}
-        variant={isSmallScreen ? 'temporary' : 'persistent'}
-        open={showSidebar}
-        onClose={() => setShowSidebar(false)}
-        onOpen={() => setShowSidebar(true)}
-        ModalProps={{
-          keepMounted: true, // Better open performance on mobile.
-        }}
-        sx={{
-          '& .MuiDrawer-paper': {
-            boxSizing: 'border-box',
-            width: sidebarWidth,
-          },
-        }}
-        SlideProps={language === 'ar' ? { direction: 'left' } : undefined}
-        PaperProps={language === 'ar' ? { sx: { direction: 'rtl' } } : undefined}
-        disableSwipeToOpen={CHATBOX_BUILD_PLATFORM !== 'ios'} // 只在iOS设备上启用SwipeToOpen
-      >
-        <div className="ToolBar h-full">
-          <Stack
-            // 在 Mac 上给窗口控制按钮留出空间, 更完善的话切换到全屏时不需要留空间，但需要监听全屏状态变化，暂时不考虑
-            className={cn('pl-2 pr-1')}
-            sx={{
-              height: '100%',
-            }}
-          >
-            <Box className={cn('flex title-bar items-center', needRoomForMacWindowControls ? 'pt-12' : 'pt-3')}></Box>
-            <Box className={cn('flex justify-between items-center p-0 m-0 mx-2 mb-2')}>
-              <Box className="title-bar">
-                <img src={icon} className="w-6 h-6 mr-2 align-middle inline-block" />
-                <span className="text-xl font-semibold align-middle inline-block opacity-75">Chatbox</span>
-              </Box>
-              <Box onClick={() => setShowSidebar(!showSidebar)}>
-                <IconButton
-                  sx={
-                    isSmallScreen
-                      ? {
-                          borderColor: theme.palette.action.hover,
-                          borderStyle: 'solid',
-                          borderWidth: 1,
-                        }
-                      : {}
-                  }
-                >
-                  <PanelLeftClose size="20" strokeWidth={1.5} />
-                </IconButton>
-              </Box>
-            </Box>
-
-            <SessionList sessionListRef={sessionListRef} />
-
-            <Divider variant="fullWidth" />
-
-            <Box sx={isSmallScreen ? {} : { marginBottom: '20px' }}>
-              <SidebarButtons sessionListRef={sessionListRef} />
-            </Box>
-          </Stack>
-        </div>
-      </SwipeableDrawer>
-    </div>
-  )
-}
-
-function SidebarButtons(props: { sessionListRef: React.RefObject<HTMLDivElement> }) {
-  const { sessionListRef } = props
-  const { t } = useTranslation()
-  const versionHook = useVersion()
-  const routerState = useRouterState()
-  const navigate = useNavigate()
-  const setShowSidebar = useSetAtom(atoms.showSidebarAtom)
-  const isSmallScreen = useIsSmallScreen()
-
   const handleCreateNewSession = useCallback(() => {
-    // sessionActions.createEmpty('chat')
-    // if (sessionListRef.current) {
-    //   sessionListRef.current.scrollTo(0, 0)
-    // }
     navigate({ to: `/` })
 
-    // On small screen, when click create new session happens
-    // while path does not change, automatic hide sidebar won't take effect.
-    // So trigger by ourself.
     if (isSmallScreen) {
       setShowSidebar(false)
     }
     trackingEvent('create_new_conversation', { event_category: 'user' })
   }, [navigate, setShowSidebar, isSmallScreen])
 
-  const handleCreateNewPictureSession = () => {
-    sessionActions.createEmpty('picture')
-    if (sessionListRef.current) {
-      sessionListRef.current.scrollTo(0, 0)
+  const handleCreateNewPictureSession = useCallback(() => {
+    void createEmpty('picture')
+    if (sessionListViewportRef.current) {
+      sessionListViewportRef.current.scrollTo(0, 0)
     }
     if (isSmallScreen) {
       setShowSidebar(false)
     }
     trackingEvent('create_new_picture_conversation', { event_category: 'user' })
-  }
+  }, [isSmallScreen, setShowSidebar])
+
+  const handleResizeStart = useCallback(
+    (e: React.MouseEvent) => {
+      if (isSmallScreen) return
+      e.preventDefault()
+      e.stopPropagation()
+      setIsResizing(true)
+      resizeStartX.current = e.clientX
+      resizeStartWidth.current = sidebarWidth
+    },
+    [isSmallScreen, sidebarWidth]
+  )
+
+  useEffect(() => {
+    if (!isResizing) return
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const isRTL = language === 'ar'
+      const deltaX = isRTL ? resizeStartX.current - e.clientX : e.clientX - resizeStartX.current
+      const newWidth = Math.max(200, Math.min(500, resizeStartWidth.current + deltaX))
+      setSidebarWidth(newWidth)
+    }
+
+    const handleMouseUp = () => {
+      setIsResizing(false)
+    }
+
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [isResizing, language, setSidebarWidth])
 
   return (
-    <MenuList>
-      <Box className="flex flex-col m-1 mb-2 gap-2">
-        <Button variant="outlined" className="w-full gap-2" size="large" onClick={handleCreateNewSession}>
-          <AddIcon fontSize="small" />
-          <span className="flex flex-col normal-case">
-            <span>{t('New Chat')}</span>
-            <span className="opacity-0 h-0">{t('New Images')}</span>
-          </span>
-        </Button>
-
-        <Button variant="outlined" className="w-full gap-2 " size="large" onClick={handleCreateNewPictureSession}>
-          <AddPhotoAlternateIcon fontSize="small" />
-          <span className="flex flex-col normal-case">
-            <span className="opacity-0 h-0">{t('New Chat')}</span>
-            <span>{t('New Images')}</span>
-          </span>
-        </Button>
-      </Box>
-
-      {/* <MenuItem onClick={handleCreateNewSession} sx={{ padding: '0.2rem 0.1rem', margin: '0.1rem' }}>
-        <ListItemIcon>
-          <IconButton>
-            <AddIcon fontSize="small" />
-          </IconButton>
-        </ListItemIcon>
-        <ListItemText>{t('new chat')}</ListItemText>
-        <Typography variant="body2" color="text.secondary">
-        </Typography>
-      </MenuItem>
-
-      <MenuItem onClick={handleCreateNewPictureSession} sx={{ padding: '0.2rem 0.1rem', margin: '0.1rem' }}>
-        <ListItemIcon>
-          <IconButton>
-            <AddPhotoAlternateIcon fontSize="small" />
-          </IconButton>
-        </ListItemIcon>
-        <ListItemText>{t('New Images')}</ListItemText>
-        <Typography variant="body2" color="text.secondary">
-        </Typography>
-      </MenuItem> */}
-
-      <MenuItem
-        onClick={() => {
-          navigate({
-            to: '/copilots',
-          })
-          if (isSmallScreen) {
-            setShowSidebar(false)
-          }
-        }}
-        selected={routerState.location.pathname === '/copilots'}
-        sx={{ padding: '0.2rem 0.1rem', margin: '0.1rem' }}
+    <SwipeableDrawer
+      anchor={language === 'ar' ? 'right' : 'left'}
+      variant={isSmallScreen ? 'temporary' : 'persistent'}
+      open={showSidebar}
+      onClose={() => setShowSidebar(false)}
+      onOpen={() => setShowSidebar(true)}
+      ModalProps={{
+        keepMounted: true, // Better open performance on mobile.
+      }}
+      sx={{
+        '& .MuiDrawer-paper': {
+          backgroundImage: 'none',
+          boxSizing: 'border-box',
+          width: isSmallScreen ? '75vw' : sidebarWidth,
+          maxWidth: '75vw',
+        },
+      }}
+      SlideProps={language === 'ar' ? { direction: 'left' } : undefined}
+      PaperProps={
+        language === 'ar' ? { sx: { direction: 'rtl', overflowY: 'initial' } } : { sx: { overflowY: 'initial' } }
+      }
+      disableSwipeToOpen={CHATBOX_BUILD_PLATFORM !== 'ios'} // 只在iOS设备上启用SwipeToOpen
+      disableEnforceFocus={true} // 关闭 focus trap，避免在侧边栏打开时弹出的 modal 中 input 无法点击
+    >
+      <Stack
+        h="100%"
+        gap={0}
+        pt="var(--mobile-safe-area-inset-top, 0px)"
+        pb="var(--mobile-safe-area-inset-bottom, 0px)"
+        className="relative"
       >
-        <ListItemIcon>
-          <IconButton>
-            <SmartToyIcon fontSize="small" />
-          </IconButton>
-        </ListItemIcon>
-        <ListItemText>
-          <Typography>{t('My Copilots')}</Typography>
-        </ListItemText>
-      </MenuItem>
+        {needRoomForMacWindowControls && <Box className="title-bar flex-[0_0_44px]" />}
+        <Flex align="center" justify="space-between" px="md" py="sm">
+          <Flex align="center" gap="sm">
+            <Image src={icon} w={20} h={20} />
+            <Text span c="chatbox-secondary" size="xl" lh={1.2} fw="700">
+              Chatbox
+            </Text>
+            {FORCE_ENABLE_DEV_PAGES && <ThemeSwitchButton size="xs" />}
+          </Flex>
 
-      <MenuItem
-        onClick={() => {
-          // setOpenSettingDialog('ai')
-          if (!routerState.location.pathname.startsWith('/settings')) {
-            navigate({
-              to: '/settings',
-            })
-          }
-          if (isSmallScreen) {
-            setShowSidebar(false)
-          }
-        }}
-        selected={routerState.location.pathname.startsWith('/settings')}
-        sx={{ padding: '0.2rem 0.1rem', margin: '0.1rem' }}
-      >
-        <ListItemIcon>
-          <IconButton>
-            <SettingsIcon fontSize="small" />
-          </IconButton>
-        </ListItemIcon>
-        <ListItemText>{t('Settings')}</ListItemText>
-        <Typography variant="body2" color="text.secondary">
-          {/* ⌘N */}
-        </Typography>
-      </MenuItem>
+          <Tooltip label={t('Collapse')} openDelay={1000} withArrow>
+            <ActionIcon variant="subtle" color="chatbox-tertiary" size={20} onClick={() => setShowSidebar(false)}>
+              <IconLayoutSidebarLeftCollapse />
+            </ActionIcon>
+          </Tooltip>
+        </Flex>
 
-      <MenuItem
-        onClick={() => {
-          navigate({
-            to: '/about',
-          })
-          if (isSmallScreen) {
-            setShowSidebar(false)
-          }
-        }}
-        selected={routerState.location.pathname === '/about'}
-        sx={{ padding: '0.2rem 0.1rem', margin: '0.1rem' }}
-      >
-        <ListItemIcon>
-          <IconButton>
-            <InfoOutlinedIcon fontSize="small" />
-          </IconButton>
-        </ListItemIcon>
-        <ListItemText>
-          <Typography sx={{ opacity: 0.5 }}>
-            {t('About')}
-            {/\d/.test(versionHook.version) ? `(${versionHook.version})` : ''}
-          </Typography>
-        </ListItemText>
-      </MenuItem>
-    </MenuList>
+        <SessionList sessionListViewportRef={sessionListViewportRef} />
+
+        <Stack gap={0} px="xs" pb="xs">
+          <Divider />
+          <Flex gap="xs" pt="xs" mb="xs">
+            <Button variant="light" flex={1} onClick={handleCreateNewSession}>
+              <ScalableIcon icon={IconCirclePlus} className="mr-2" />
+              {t('New Chat')}
+            </Button>
+            <Button variant="light" px="sm" onClick={handleCreateNewPictureSession}>
+              <ScalableIcon icon={IconPhotoPlus} />
+            </Button>
+          </Flex>
+          <NavLink
+            c="chatbox-secondary"
+            className="rounded"
+            label={t('My Copilots')}
+            leftSection={<ScalableIcon icon={IconMessageChatbot} size={20} />}
+            onClick={() => {
+              navigate({
+                to: '/copilots',
+              })
+              if (isSmallScreen) {
+                setShowSidebar(false)
+              }
+            }}
+            variant="light"
+            p="xs"
+          />
+          <NavLink
+            c="chatbox-secondary"
+            className="rounded"
+            label={t('Settings')}
+            leftSection={<ScalableIcon icon={IconSettingsFilled} size={20} />}
+            onClick={() => {
+              navigateToSettings()
+              if (isSmallScreen) {
+                setShowSidebar(false)
+              }
+            }}
+            variant="light"
+            p="xs"
+          />
+          {FORCE_ENABLE_DEV_PAGES && (
+            <NavLink
+              c="chatbox-secondary"
+              className="rounded"
+              label="Dev Tools"
+              leftSection={<ScalableIcon icon={IconCode} size={20} />}
+              onClick={() => {
+                navigate({
+                  to: '/dev',
+                })
+                if (isSmallScreen) {
+                  setShowSidebar(false)
+                }
+              }}
+              variant="light"
+              p="xs"
+            />
+          )}
+          <NavLink
+            c="chatbox-tertiary"
+            className="rounded"
+            label={`${t('About')} ${/\d/.test(versionHook.version) ? `(${versionHook.version})` : ''}`}
+            leftSection={<ScalableIcon icon={IconInfoCircle} size={20} />}
+            onClick={() => {
+              navigate({
+                to: '/about',
+              })
+              if (isSmallScreen) {
+                setShowSidebar(false)
+              }
+            }}
+            variant="light"
+            p="xs"
+          />
+        </Stack>
+        {!isSmallScreen && (
+          <Box
+            onMouseDown={handleResizeStart}
+            className={clsx(
+              `sidebar-resizer absolute top-0 bottom-0 w-1 cursor-col-resize z-[1] bg-chatbox-border-primary opacity-0 hover:opacity-70 transition-opacity duration-200`,
+              language === 'ar' ? '-left-1' : '-right-1'
+            )}
+          />
+        )}
+      </Stack>
+    </SwipeableDrawer>
   )
 }

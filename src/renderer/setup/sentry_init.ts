@@ -1,7 +1,8 @@
 import * as Sentry from '@sentry/react'
 import { CHATBOX_BUILD_PLATFORM, CHATBOX_BUILD_TARGET, NODE_ENV } from '@/variables'
 import platform from '../platform'
-;(async () => {
+
+void (async () => {
   const settings = await platform.getSettings()
   if (!settings.allowReportingAndTracking) {
     return
@@ -10,16 +11,10 @@ import platform from '../platform'
   const version = await platform.getVersion().catch(() => 'unknown')
   Sentry.init({
     dsn: 'https://eca691c5e01ebfa05958fca1fcb487a9@sentry.midway.run/697',
-    integrations: [
-      new Sentry.BrowserTracing({
-        // Set `tracePropagationTargets` to control for which URLs distributed tracing should be enabled
-        tracePropagationTargets: ['localhost', /^https:\/\/chatboxai\.app/, /^https:\/\/chatboxapp\.xyz/],
-      }),
-      new Sentry.Replay(),
-    ],
     environment: NODE_ENV,
     // Performance Monitoring
-    sampleRate: 0.1,
+    // Set to 1.0 to capture all errors, then sample in beforeSend
+    sampleRate: 1.0,
     tracesSampleRate: 0.1, // Capture 100% of the transactions, reduce in production!
     // Session Replay
     replaysSessionSampleRate: 0.05, // This sets the sample rate at 10%. You may want to change it to 100% while in development and then sample at a lower rate in production.
@@ -34,5 +29,22 @@ import platform from '../platform'
         build_platform: CHATBOX_BUILD_PLATFORM,
       },
     },
+    // beforeSend hook implements differential sampling
+    beforeSend(event) {
+      // ErrorBoundary: 100% reporting
+      if (event.tags?.errorBoundary) {
+        return event
+      }
+
+      // Other errors: 10% sampling
+      if (Math.random() < 0.1) {
+        return event
+      }
+
+      // Discard 90% of non-ErrorBoundary errors
+      return null
+    },
   })
 })()
+
+export default Sentry

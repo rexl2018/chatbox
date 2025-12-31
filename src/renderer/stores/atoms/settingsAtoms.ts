@@ -3,14 +3,20 @@ import { atomWithStorage } from 'jotai/utils'
 import { focusAtom } from 'jotai-optics'
 import { omit } from 'lodash'
 import * as defaults from '../../../shared/defaults'
-import { type SessionSettings, type Settings, type SettingWindowTab, Theme } from '../../../shared/types'
+import {
+  type SessionSettings,
+  type Settings,
+  SettingsSchema,
+  type SettingWindowTab,
+  Theme,
+} from '../../../shared/types'
 import platform from '../../platform'
 import storage, { StorageKey } from '../../storage'
 
 // settings
 const _settingsAtom = atomWithStorage<Settings>(
   StorageKey.Settings,
-  {
+  SettingsSchema.parse({
     ...defaults.settings(),
     theme: (() => {
       const initialTheme = localStorage.getItem('initial-theme')
@@ -21,7 +27,7 @@ const _settingsAtom = atomWithStorage<Settings>(
       }
       return Theme.System
     })(),
-  },
+  }),
   storage
 )
 export const settingsAtom = atom(

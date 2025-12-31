@@ -1,7 +1,3 @@
-import { useIsSmallScreen } from '@/hooks/useScreenChange'
-import { cn } from '@/lib/utils'
-import { getMessageText } from '@/utils/message'
-import * as sessionActions from '@/stores/sessionActions'
 import NiceModal from '@ebay/nice-modal-react'
 import ReplayOutlinedIcon from '@mui/icons-material/ReplayOutlined'
 import StopCircleOutlinedIcon from '@mui/icons-material/StopCircleOutlined'
@@ -9,8 +5,14 @@ import { ButtonGroup, IconButton } from '@mui/material'
 import { debounce } from 'lodash'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import type { Message } from 'src/shared/types/session'
+import { useIsSmallScreen } from '@/hooks/useScreenChange'
+import { cn } from '@/lib/utils'
+import { getMessageThreadContext } from '@/stores/sessionActions'
+import { getMessageText } from '../../shared/utils/message'
 import ArrowRightIcon from './icons/ArrowRightIcon'
 import FullscreenIcon from './icons/FullscreenIcon'
+
 const RENDERABLE_CODE_LANGUAGES = ['html'] as const
 export type RenderableCodeLanguage = (typeof RENDERABLE_CODE_LANGUAGES)[number]
 
@@ -39,14 +41,28 @@ export function MessageArtifact(props: {
   setPreview: (preview: boolean) => void
 }) {
   const { sessionId, messageId, messageContent, preview, setPreview } = props
-  const contextMessages = useMemo(() => {
-    const messageList = sessionActions.getMessageThreadContext(sessionId, messageId)
-    const index = messageList.findIndex((m) => m.id === messageId)
-    return messageList.slice(0, index)
-  }, [sessionId, messageId])
+
+  const [contextMessages, setContextMessages] = useState<Message[]>([])
+
+  useEffect(() => {
+    async function fetchContextMessages(): Promise<Message[]> {
+      if (!sessionId || !messageId) {
+        return []
+      }
+      const messageList = await getMessageThreadContext(sessionId, messageId)
+      const index = messageList.findIndex((m) => m.id === messageId)
+
+      return messageList.slice(0, index)
+    }
+    void fetchContextMessages().then((msgs) => {
+      setContextMessages(msgs)
+    })
+  }, [messageId, sessionId])
+
   const htmlCode = useMemo(() => {
     return generateHtml([...contextMessages.map((m) => getMessageText(m)), messageContent])
   }, [contextMessages, messageContent])
+
   return <ArtifactWithButtons htmlCode={htmlCode} preview={preview} setPreview={setPreview} />
 }
 
@@ -70,8 +86,8 @@ export function ArtifactWithButtons(props: {
   const onStopPreview = () => {
     setPreview(false)
   }
-  const onOpenFullscreen = () => {
-    NiceModal.show('artifact-preview', {
+  const onOpenFullscreen = async () => {
+    await NiceModal.show('artifact-preview', {
       htmlCode,
     })
   }
@@ -221,7 +237,6 @@ function generateHtml(markdowns: string[]): string {
       }
       if (currentType) {
         currentContent += line + '\n'
-        continue
       }
     }
   }

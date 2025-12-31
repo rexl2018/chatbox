@@ -1,9 +1,11 @@
-import storage from '../storage'
 import { getDefaultStore } from 'jotai'
-import * as atoms from '../stores/atoms'
-import platform from '../platform'
-import { Message, Session } from 'src/shared/types'
+import type { Message, Session } from 'src/shared/types'
 import { StorageKeyGenerator } from '@/storage/StoreStorage'
+import { listSessionsMeta } from '@/stores/chatStore'
+import { settingsStore } from '@/stores/settingsStore'
+import platform from '../platform'
+import storage from '../storage'
+import * as atoms from '../stores/atoms'
 
 // 启动时执行消息图片清理
 // 只有网页版本需要清理，桌面版本存在本地、空间足够大无需清理
@@ -23,10 +25,8 @@ export async function tickStorageTask() {
   }
   const needDeletedSet = new Set<string>(storageKeys)
 
-  const store = getDefaultStore()
-
   // 会话中还存在的图片、文件不需要删除
-  const sessions = store.get(atoms.sessionsListAtom)
+  const sessions = await listSessionsMeta()
   for (const sessionMeta of sessions) {
     // 不从 atom 中获取，避免水合状态
     const session = await storage.getItem<Session | null>(StorageKeyGenerator.session(sessionMeta.id), null)
@@ -66,7 +66,7 @@ export async function tickStorageTask() {
   }
 
   // 用户头像不需要删除
-  const settings = store.get(atoms.settingsAtom)
+  const settings = settingsStore.getState().getSettings()
   if (settings.userAvatarKey) {
     needDeletedSet.delete(settings.userAvatarKey)
   }

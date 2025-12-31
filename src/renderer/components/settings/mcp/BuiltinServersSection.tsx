@@ -1,10 +1,10 @@
-import { useToggleMCPServer } from '@/hooks/mcp'
-import { useSettings } from '@/hooks/useSettings'
-import { BuildinMCPServerConfig, BUILTIN_MCP_SERVERS } from '@/packages/mcp/builtin'
-import { useAutoValidate } from '@/stores/premiumActions'
 import { Flex, Paper, SimpleGrid, Switch, Text } from '@mantine/core'
-import { FC } from 'react'
+import type { FC } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useToggleMCPServer } from '@/hooks/mcp'
+import { BUILTIN_MCP_SERVERS, type BuildinMCPServerConfig } from '@/packages/mcp/builtin'
+import { useAutoValidate } from '@/stores/premiumActions'
+import { useMcpSettings } from '@/stores/settingsStore'
 
 const ServerCard: FC<{
   config: BuildinMCPServerConfig
@@ -34,7 +34,7 @@ const ServerCard: FC<{
 
 export const BuiltinServersSection: FC = () => {
   const { t } = useTranslation()
-  const { settings } = useSettings()
+  const mcp = useMcpSettings()
   const isPremium = useAutoValidate()
   const onEnabledChange = useToggleMCPServer()
   return (
@@ -50,7 +50,7 @@ export const BuiltinServersSection: FC = () => {
           <ServerCard
             key={config.id}
             config={config}
-            enabled={settings.mcp.enabledBuiltinServers.includes(config.id)}
+            enabled={mcp.enabledBuiltinServers.includes(config.id)}
             onEnabledChange={onEnabledChange}
             accessible={isPremium}
           />

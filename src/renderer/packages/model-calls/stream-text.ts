@@ -1,4 +1,4 @@
-import type { CoreMessage, ToolSet } from 'ai'
+import type { ModelMessage, ToolSet } from 'ai'
 import { t } from 'i18next'
 import { uniqueId } from 'lodash'
 import { getModel } from 'src/shared/models'
@@ -7,7 +7,8 @@ import { sequenceMessages } from 'src/shared/utils/message'
 import { getModelSettings } from 'src/shared/utils/model_settings'
 import { createModelDependencies } from '@/adapters'
 import * as settingActions from '@/stores/settingActions'
-import type { ModelInterface, OnResultChange, onResultChangeWithCancel } from '../../../shared/models/types'
+import { settingsStore } from '@/stores/settingsStore'
+import type { ModelInterface, OnResultChange, OnResultChangeWithCancel } from '../../../shared/models/types'
 import {
   type KnowledgeBase,
   type Message,
@@ -17,9 +18,8 @@ import {
   type ProviderOptions,
   type StreamTextResult,
 } from '../../../shared/types'
-import { getToolSet } from '../knowledge-base/tools'
 import { mcpController } from '../mcp/controller'
-import { convertToCoreMessages, injectModelSystemPrompt } from './message-utils'
+import { convertToModelMessages, injectModelSystemPrompt } from './message-utils'
 import { imageOCR } from './preprocess'
 import {
   combinedSearchByPromptEngineering,
@@ -27,8 +27,10 @@ import {
   constructMessagesWithSearchResults,
   knowledgeBaseSearchByPromptEngineering,
   searchByPromptEngineering,
-  webSearchTool,
 } from './tools'
+import fileToolSet from './toolsets/file'
+import { getToolSet } from './toolsets/knowledge-base'
+import websearchToolSet, { parseLinkTool, webSearchTool } from './toolsets/web-search'
 
 /**
  * 处理搜索结果并返回模型响应的通用函数
@@ -38,7 +40,7 @@ async function handleSearchResult(
   toolName: string,
   model: ModelInterface,
   messages: Message[],
-  coreMessages: CoreMessage[],
+  coreMessages: ModelMessage[],
   controller: AbortController,
   onResultChange: OnResultChange,
   params: { providerOptions?: ProviderOptions }
@@ -62,7 +64,7 @@ async function handleSearchResult(
       ? constructMessagesWithKnowledgeBaseResults(messages, result.searchResults)
       : constructMessagesWithSearchResults(messages, result.searchResults)
 
-  return model.chat(await convertToCoreMessages(messagesWithResults), {
+  return model.chat(await convertToModelMessages(messagesWithResults), {
     signal: controller.signal,
     onResultChange: (data) => {
       if (data.contentParts) {
@@ -78,7 +80,7 @@ async function handleSearchResult(
 async function ocrMessages(messages: Message[]) {
   // check chatbox ai license active
   const licenseKey = settingActions.getLicenseKey()
-  const settings = settingActions.getSettings()
+  const settings = settingsStore.getState().getSettings()
   if (!licenseKey && !(settings.ocrModel?.provider && settings.ocrModel?.model)) {
     // use default ocr model
     throw ChatboxAIAPIError.fromCodeName('model_not_support_image_2', 'model_not_support_image_2')
@@ -87,11 +89,11 @@ async function ocrMessages(messages: Message[]) {
   const dependencies = await createModelDependencies()
   if (settings.licenseKey) {
     const modelSettings = getModelSettings(settings, ModelProviderEnum.ChatboxAI, 'chatbox-ocr-1')
-    ocrModel = getModel(modelSettings, { uuid: '123' }, dependencies)
+    ocrModel = getModel(modelSettings, settings, { uuid: '123' }, dependencies)
   } else {
     const ocrModelSetting = settings.ocrModel
     const modelSettings = getModelSettings(settings, ocrModelSetting?.provider!, ocrModelSetting?.model!)
-    ocrModel = getModel(modelSettings, { uuid: '123' }, dependencies)
+    ocrModel = getModel(modelSettings, settings, { uuid: '123' }, dependencies)
   }
   // do OCR first
   await imageOCR(ocrModel, messages)
@@ -105,7 +107,7 @@ export async function streamText(
   params: {
     sessionId?: string
     messages: Message[]
-    onResultChangeWithCancel: onResultChangeWithCancel
+    onResultChangeWithCancel: OnResultChangeWithCancel
     providerOptions?: ProviderOptions
     knowledgeBase?: Pick<KnowledgeBase, 'id' | 'name'>
     webBrowsing?: boolean
@@ -113,6 +115,7 @@ export async function streamText(
   signal?: AbortSignal
 ) {
   const { knowledgeBase, webBrowsing, sessionId } = params
+  const hasFileOrLink = params.messages.some((m) => m.files?.length || m.links?.length)
 
   const controller = new AbortController()
   const cancel = () => controller.abort()
@@ -123,17 +126,28 @@ export async function streamText(
   let result: StreamTextResult = {
     contentParts: [],
   }
-  // 不支持工具调用的模型，使用prompt engineering的方式处理知识库和网络搜索
+  // for model not support tool use, use prompt engineering to handle knowledge base and web search
+  const needFileToolSet = hasFileOrLink && model.isSupportToolUse()
   const kbNotSupported = knowledgeBase && !model.isSupportToolUse('knowledge-base')
   const webNotSupported = webBrowsing && !model.isSupportToolUse('web-browsing')
+
+  // 1. inject system prompt for tool use
+  let toolSetInstructions = ''
+  if (knowledgeBase && !kbNotSupported) {
+    toolSetInstructions += getToolSet(knowledgeBase.id, knowledgeBase.name).description
+  }
+  if (needFileToolSet) {
+    toolSetInstructions += fileToolSet.description
+  }
+  if (webBrowsing && !webNotSupported) {
+    toolSetInstructions += websearchToolSet.description
+  }
 
   params.messages = injectModelSystemPrompt(
     model.modelId,
     params.messages,
     // 在系统提示中添加知识库名称，方便模型理解
-    knowledgeBase && !kbNotSupported
-      ? `Knowledge base is available to help you answer questions: ${knowledgeBase.name}`
-      : '',
+    toolSetInstructions,
     model.isSupportSystemMessage() ? 'system' : 'user'
   )
 
@@ -141,6 +155,7 @@ export async function streamText(
     params.messages = params.messages.map((m) => ({ ...m, role: m.role === 'system' ? 'user' : m.role }))
   }
 
+  // 2. sequence messages to fix the order, prevent model API 400 errors
   const messages = sequenceMessages(params.messages)
   const infoParts: MessageInfoPart[] = []
   try {
@@ -166,8 +181,9 @@ export async function streamText(
       })
     }
 
-    const coreMessages = await convertToCoreMessages(messages, { modelSupportVision: model.isSupportVision() })
+    const coreMessages = await convertToModelMessages(messages, { modelSupportVision: model.isSupportVision() })
 
+    // 3. handle model not support tool use scenarios
     if (kbNotSupported || webNotSupported) {
       // 当两个功能都启用且都不支持工具调用时，使用组合搜索
       if (kbNotSupported && webNotSupported) {
@@ -244,18 +260,30 @@ export async function streamText(
       }
     }
 
+    // 4. construct tool set
     let tools: ToolSet = {
       ...mcpController.getAvailableTools(),
     }
     if (webBrowsing) {
       tools.web_search = webSearchTool
+      if (settingActions.isPro()) {
+        tools.parse_link = parseLinkTool
+      }
     }
     if (knowledgeBase) {
       tools = {
         ...tools,
-        ...getToolSet(knowledgeBase.id),
+        ...getToolSet(knowledgeBase.id, knowledgeBase.name).tools,
       }
     }
+
+    if (needFileToolSet) {
+      tools = {
+        ...tools,
+        ...fileToolSet.tools,
+      }
+    }
+
     console.debug('tools', tools)
 
     result = await model.chat(coreMessages, {

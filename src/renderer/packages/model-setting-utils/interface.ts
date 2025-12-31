@@ -1,4 +1,10 @@
-import { ModelOptionGroup, ModelProvider, ProviderBaseInfo, ProviderSettings, SessionType } from 'src/shared/types'
+import type {
+  ModelProvider,
+  ProviderBaseInfo,
+  ProviderModelInfo,
+  ProviderSettings,
+  SessionType,
+} from 'src/shared/types'
 
 export interface ModelSettingUtil {
   provider: ModelProvider
@@ -10,5 +16,5 @@ export interface ModelSettingUtil {
     providerBaseInfo?: ProviderBaseInfo
   ): Promise<string>
   // 获取该provider远程的模型组
-  getMergeOptionGroups(providerSettings: ProviderSettings): Promise<ModelOptionGroup[]>
+  getMergeOptionGroups(providerSettings: ProviderSettings): Promise<ProviderModelInfo[]>
 }

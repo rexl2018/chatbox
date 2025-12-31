@@ -1,74 +1,56 @@
 import NiceModal from '@ebay/nice-modal-react'
-import AddPhotoAlternateIcon from '@mui/icons-material/AddPhotoAlternate'
-import CopyAllIcon from '@mui/icons-material/CopyAll'
-import EditIcon from '@mui/icons-material/Edit'
-import FormatQuoteIcon from '@mui/icons-material/FormatQuote'
-import ImageIcon from '@mui/icons-material/Image'
-import MoreVertIcon from '@mui/icons-material/MoreVert'
-import PersonIcon from '@mui/icons-material/Person'
-import ReplayIcon from '@mui/icons-material/Replay'
-import ReportIcon from '@mui/icons-material/Report'
-import SettingsIcon from '@mui/icons-material/Settings'
-import SmartToyIcon from '@mui/icons-material/SmartToy'
-import SouthIcon from '@mui/icons-material/South'
-import StopIcon from '@mui/icons-material/Stop'
-import { Alert, ButtonGroup, Grid, IconButton, Tooltip, Typography, useTheme } from '@mui/material'
-import Avatar from '@mui/material/Avatar'
+import { ActionIcon, type ActionIconProps, Flex, Image as Img, Loader, Text, Tooltip as Tooltip1 } from '@mantine/core'
+import { Grid, Typography, useTheme } from '@mui/material'
 import Box from '@mui/material/Box'
-import MenuItem from '@mui/material/MenuItem'
-import { useNavigate } from '@tanstack/react-router'
+import {
+  IconArrowDown,
+  IconBug,
+  IconCode,
+  IconCopy,
+  IconDotsVertical,
+  IconInfoCircle,
+  IconMessageReport,
+  IconPencil,
+  IconPhotoPlus,
+  type IconProps,
+  IconQuoteFilled,
+  IconReload,
+  IconTrash,
+} from '@tabler/icons-react'
+import { useQuery } from '@tanstack/react-query'
+import clsx from 'clsx'
 import * as dateFns from 'date-fns'
-import { useAtomValue, useSetAtom } from 'jotai'
-import { isEmpty } from 'lodash'
+import { concat } from 'lodash'
+import type { UIElementData } from 'photoswipe'
 import type React from 'react'
-import { type FC, type MouseEventHandler, memo, useEffect, useMemo, useRef, useState } from 'react'
+import { type FC, forwardRef, type MouseEventHandler, memo, useCallback, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Gallery, Item as GalleryItem } from 'react-photoswipe-gallery'
 import Markdown from '@/components/Markdown'
-import * as dom from '@/hooks/dom'
+import { useIsSmallScreen } from '@/hooks/useScreenChange'
 import { cn } from '@/lib/utils'
+import { navigateToSettings } from '@/modals/Settings'
 import { copyToClipboard } from '@/packages/navigator'
-import { estimateTokensFromMessages } from '@/packages/token'
 import { countWord } from '@/packages/word-count'
 import platform from '@/platform'
-import { getMessageText } from '@/utils/message'
-import type { Message, SessionType } from '../../shared/types'
+import storage from '@/storage'
+import { getSession } from '@/stores/chatStore'
+import { useSettingsStore } from '@/stores/settingsStore'
+import { useUIStore } from '@/stores/uiStore'
+import type { Message, MessagePicture, MessageToolCallPart, SessionType } from '../../shared/types'
+import { getMessageText } from '../../shared/utils/message'
 import '../static/Block.css'
-
-import { IconInfoCircle } from '@tabler/icons-react'
-import {
-  autoCollapseCodeBlockAtom,
-  autoPreviewArtifactsAtom,
-  currentSessionAssistantAvatarKeyAtom,
-  currentSessionPicUrlAtom,
-  defaultAssistantAvatarKeyAtom,
-  enableLaTeXRenderingAtom,
-  enableMarkdownRenderingAtom,
-  enableMermaidRenderingAtom,
-  messageScrollingScrollPositionAtom,
-  openSettingDialogAtom,
-  pictureShowAtom,
-  quoteAtom,
-  showFirstTokenLatencyAtom,
-  showMessageTimestampAtom,
-  showModelNameAtom,
-  showTokenCountAtom,
-  showTokenUsedAtom,
-  showWordCountAtom,
-  userAvatarKeyAtom,
-  widthFullAtom,
-} from '../stores/atoms'
-import * as scrollActions from '../stores/scrollActions'
-import * as sessionActions from '../stores/sessionActions'
+import { generateMore, modifyMessage, regenerateInNewFork, removeMessage } from '../stores/sessionActions'
 import * as toastActions from '../stores/toastActions'
+import ActionMenu, { type ActionMenuItemProps } from './ActionMenu'
 import { isContainRenderableCode, MessageArtifact } from './Artifact'
 import { MessageAttachment } from './Attachments'
-import { ConfirmDeleteMenuItem } from './ConfirmDeleteButton'
-import { ImageInStorage, Img } from './Image'
+import { AssistantAvatar, SystemAvatar, UserAvatar } from './Avatar'
 import Loading from './icons/Loading'
 import MessageErrTips from './MessageErrTips'
 import MessageStatuses from './MessageLoading'
 import { ReasoningContentUI, ToolCallPartUI } from './message-parts/ToolCallPartUI'
-import StyledMenu from './StyledMenu'
+import { ScalableIcon } from './ScalableIcon'
 
 interface Props {
   id?: string
@@ -77,38 +59,44 @@ interface Props {
   msg: Message
   className?: string
   collapseThreshold?: number // 文本长度阀值, 超过这个长度则会被折叠
-  hiddenButtonGroup?: boolean
+  buttonGroup?: 'auto' | 'always' | 'none' // 按钮组显示策略, auto: 只在 hover 时显示; always: 总是显示; none: 不显示
   small?: boolean
-  preferCollapsedCodeBlock?: boolean
+  assistantAvatarKey?: string
+  sessionPicUrl?: string
 }
 
 const _Message: FC<Props> = (props) => {
-  const { msg, className, collapseThreshold, hiddenButtonGroup, small, preferCollapsedCodeBlock } = props
+  const {
+    sessionId,
+    msg,
+    className,
+    collapseThreshold,
+    buttonGroup = 'auto',
+    small,
+    assistantAvatarKey,
+    sessionPicUrl,
+  } = props
 
-  const navigate = useNavigate()
   const { t } = useTranslation()
   const theme = useTheme()
-  const currentSessionAssistantAvatarKey = useAtomValue(currentSessionAssistantAvatarKeyAtom)
-  const defaultAssistantAvatarKey = useAtomValue(defaultAssistantAvatarKeyAtom)
-  const userAvatarKey = useAtomValue(userAvatarKeyAtom)
-  const showMessageTimestamp = useAtomValue(showMessageTimestampAtom)
-  const showModelName = useAtomValue(showModelNameAtom)
-  const showTokenCount = useAtomValue(showTokenCountAtom)
-  const showWordCount = useAtomValue(showWordCountAtom)
-  const showTokenUsed = useAtomValue(showTokenUsedAtom)
-  const showFirstTokenLatency = useAtomValue(showFirstTokenLatencyAtom)
-  const enableMarkdownRendering = useAtomValue(enableMarkdownRenderingAtom)
-  const enableLaTeXRendering = useAtomValue(enableLaTeXRenderingAtom)
-  const enableMermaidRendering = useAtomValue(enableMermaidRenderingAtom)
-  const currentSessionPicUrl = useAtomValue(currentSessionPicUrlAtom)
-  const messageScrollingScrollPosition = useAtomValue(messageScrollingScrollPositionAtom)
-  const setPictureShow = useSetAtom(pictureShowAtom)
-  const setOpenSettingWindow = useSetAtom(openSettingDialogAtom)
-  const widthFull = useAtomValue(widthFullAtom)
-  const autoPreviewArtifacts = useAtomValue(autoPreviewArtifactsAtom)
-  const autoCollapseCodeBlock = useAtomValue(autoCollapseCodeBlockAtom)
+  const isSamllScreen = useIsSmallScreen()
+  const {
+    userAvatarKey,
+    showMessageTimestamp,
+    showModelName,
+    showTokenCount,
+    showWordCount,
+    showTokenUsed,
+    showFirstTokenLatency,
+    enableMarkdownRendering,
+    enableLaTeXRendering,
+    enableMermaidRendering,
+    autoPreviewArtifacts,
+    autoCollapseCodeBlock,
+  } = useSettingsStore((state) => state)
 
   const [previewArtifact, setPreviewArtifact] = useState(autoPreviewArtifacts)
+  const [shouldThrowError, setShouldThrowError] = useState(false)
 
   const contentLength = useMemo(() => {
     return getMessageText(msg).length
@@ -123,45 +111,33 @@ const _Message: FC<Props> = (props) => {
 
   const ref = useRef<HTMLDivElement>(null)
 
-  const [autoScrollId, setAutoScrollId] = useState<null | string>(null)
+  const setQuote = useUIStore((state) => state.setQuote)
 
-  const setQuote = useSetAtom(quoteAtom)
-  const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null)
-  const open = Boolean(anchorEl)
-  const handleClick = (event: React.MouseEvent<HTMLElement>) => {
-    setAnchorEl(event.currentTarget)
-  }
-  const handleClose = () => {
-    setAnchorEl(null)
-  }
-
-  const quoteMsg = () => {
+  const quoteMsg = useCallback(() => {
     let input = getMessageText(msg)
       .split('\n')
       .map((line) => `> ${line}`)
       .join('\n')
     input += '\n\n-------------------\n\n'
     setQuote(input)
-  }
+  }, [msg, setQuote])
 
   const handleStop = () => {
-    msg?.cancel?.()
-    sessionActions.modifyMessage(props.sessionId, { ...msg, generating: false }, true)
+    modifyMessage(sessionId, { ...msg, generating: false }, true)
   }
 
   const handleRefresh = () => {
     handleStop()
-    sessionActions.regenerateInNewFork(props.sessionId, msg)
+    regenerateInNewFork(sessionId, msg)
   }
 
   const onGenerateMore = () => {
-    sessionActions.generateMore(props.sessionId, msg.id)
+    generateMore(sessionId, msg.id)
   }
 
   const onCopyMsg = () => {
     copyToClipboard(getMessageText(msg, true, false))
     toastActions.add(t('copied to clipboard'), 2000)
-    setAnchorEl(null)
   }
 
   // 复制特定 reasoning 内容
@@ -172,22 +148,32 @@ const _Message: FC<Props> = (props) => {
       if (content) {
         copyToClipboard(content)
         toastActions.add(t('copied to clipboard'))
-        setAnchorEl(null)
       }
     }
 
-  const onReport = () => {
-    setAnchorEl(null)
-    NiceModal.show('report-content', { contentId: getMessageText(msg) || msg.id })
+  const onReport = useCallback(async () => {
+    await NiceModal.show('report-content', { contentId: getMessageText(msg) || msg.id })
+  }, [msg])
+
+  const onDelMsg = useCallback(() => {
+    removeMessage(sessionId, msg.id)
+  }, [msg.id, sessionId])
+
+  const onEditClick = async () => {
+    await NiceModal.show('message-edit', { sessionId, msg: msg })
   }
 
-  const onDelMsg = () => {
-    setAnchorEl(null)
-    sessionActions.removeMessage(props.sessionId, msg.id)
-  }
-  const onEditClick = () => {
-    setAnchorEl(null)
-    NiceModal.show('message-edit', { sessionId: props.sessionId, msg: msg })
+  // for testing: manual trigger error
+  const onTriggerError = useCallback(() => {
+    setShouldThrowError(true)
+  }, [])
+
+  const onViewMessageJson = useCallback(async () => {
+    await NiceModal.show('json-viewer', { title: t('Message Raw JSON'), data: msg })
+  }, [msg, t])
+
+  if (shouldThrowError) {
+    throw new Error('Manual error triggered from Message component for testing ErrorBoundary')
   }
 
   const tips: string[] = []
@@ -198,13 +184,14 @@ const _Message: FC<Props> = (props) => {
     }
     if (showTokenCount && !msg.generating) {
       // 兼容旧版本没有提前计算的消息
-      if (msg.tokenCount === undefined) {
-        msg.tokenCount = estimateTokensFromMessages([msg])
-      }
+      // if (msg.tokenCount === undefined) {
+      //   msg.tokenCount = estimateTokensFromMessages([msg])
+      // }
       tips.push(`token count: ${msg.tokenCount}`)
     }
     if (showTokenUsed && msg.role === 'assistant' && !msg.generating) {
-      tips.push(`tokens used: ${msg.tokensUsed || 'unknown'}`)
+      tips.push(`tokens used: ${msg.usage?.totalTokens ? msg.usage.totalTokens : msg.tokensUsed || 'unknown'}`)
+      // `tokens used: ${msg.usage?.totalTokens ? `${msg.usage.totalTokens}${msg.usage.cachedInputTokens ? `(cached: ${msg.usage.cachedInputTokens})` : ''}` : msg.tokensUsed || 'unknown'}`
     }
     if (showFirstTokenLatency && msg.role === 'assistant' && !msg.generating) {
       const latency = msg.firstTokenLatency ? `${msg.firstTokenLatency}ms` : 'unknown'
@@ -242,36 +229,6 @@ const _Message: FC<Props> = (props) => {
     tips.push(`time: ${messageTimestamp}`)
   }
 
-  let fixedButtonGroup = false
-  if (ref.current) {
-    // 总共可能出现五种情况：
-    // 1. 当前消息完全在视图可见范围之上，则不固定按钮组
-    // 2. 当前消息部分在视图可见范围之外但露出尾部，则不固定按钮组
-    // 3. 当前消息完全在视图可见范围之内，则不固定按钮组
-    // 4. 当前消息部分在视图可见范围之外但露出头部，固定按钮组
-    // 5. 当前消息完全在视图可见范围之下，则不固定按钮组
-    // 因此仅考虑第4中情况
-    if (msg.generating) {
-      if (
-        // 元素的前半部分在可视范围内，且露出至少50px
-        ref.current.offsetTop + 50 < messageScrollingScrollPosition &&
-        // 元素的后半部分不在可视范围内，并且为消息生成导致的长度变化预留 50px 的空间
-        ref.current.offsetTop + ref.current.offsetHeight + 50 >= messageScrollingScrollPosition
-      ) {
-        fixedButtonGroup = true
-      }
-    } else {
-      if (
-        // 元素的前半部分在可视范围内，且露出至少50px
-        ref.current.offsetTop + 50 < messageScrollingScrollPosition &&
-        // 元素的后半部分不在可视范围内，但如果只掩盖了 40px 则无所谓
-        ref.current.offsetTop + ref.current.offsetHeight - 40 >= messageScrollingScrollPosition
-      ) {
-        fixedButtonGroup = true
-      }
-    }
-  }
-
   // 是否需要渲染 Aritfact 组件
   const needArtifact = useMemo(() => {
     if (msg.role !== 'assistant') {
@@ -280,40 +237,7 @@ const _Message: FC<Props> = (props) => {
     return isContainRenderableCode(getMessageText(msg))
   }, [msg.contentParts, msg.role, msg])
 
-  // 消息生成中自动跟踪滚动
-  useEffect(() => {
-    if (msg.generating) {
-      const autoId = scrollActions.startAutoScroll(msg.id, 'end')
-      setAutoScrollId(autoId)
-    } else {
-      if (autoScrollId) {
-        scrollActions.tickAutoScroll(autoScrollId) // 清理之前，最后再滚动一次，确保非流式生成的消息也能滚动到底部
-        scrollActions.clearAutoScroll(autoScrollId)
-      }
-      setAutoScrollId(null)
-    }
-  }, [msg.generating, autoScrollId, msg.id])
-
-  useEffect(() => {
-    if (msg.generating && autoScrollId) {
-      if (needArtifact) {
-        scrollActions.tickAutoScroll(autoScrollId)
-        return
-      }
-      const viewportHeight = scrollActions.getMessageListViewportHeight()
-      const currentHeight = ref.current?.clientHeight ?? 0
-      if (currentHeight > viewportHeight) {
-        // scrollActions.tickAutoScroll(autoScrollId)  // 清理之前，最后再滚动一次，确保非流式生成的消息也能滚动到底部
-        scrollActions.scrollToMessage(msg.id, 'start')
-        scrollActions.clearAutoScroll(autoScrollId)
-        setAutoScrollId(null)
-      } else {
-        scrollActions.tickAutoScroll(autoScrollId)
-      }
-    }
-  }, [needArtifact, autoScrollId, msg.generating, msg.id])
-
-  const contentParts = msg.contentParts
+  const contentParts = msg.contentParts || []
 
   const CollapseButton = (
     <span
@@ -324,26 +248,54 @@ const _Message: FC<Props> = (props) => {
     </span>
   )
 
-  const onClickAssistantAvatar = () => {
-    NiceModal.show('session-settings', { chatConfigDialogSessionId: props.sessionId })
-  }
-
-  function showPicture(storageKey: string) {
-    setPictureShow({
-      picture: {
-        storageKey,
-      },
-      extraButtons:
-        msg.role === 'assistant' && platform.type === 'mobile'
-          ? [
-              {
-                onClick: onReport,
-                icon: <ReportIcon />,
-              },
-            ]
-          : undefined,
+  const onClickAssistantAvatar = async () => {
+    await NiceModal.show('session-settings', {
+      session: await getSession(props.sessionId),
     })
   }
+
+  const actionMenuItems = useMemo<ActionMenuItemProps[]>(
+    () => [
+      {
+        text: t('quote'),
+        icon: IconQuoteFilled,
+        onClick: quoteMsg,
+      },
+      { divider: true },
+      ...(msg.role === 'assistant' && platform.type === 'mobile'
+        ? [
+            {
+              text: t('report'),
+              icon: IconMessageReport,
+              onClick: onReport,
+            },
+          ]
+        : []),
+      // 开发环境添加测试错误按钮
+      ...(process.env.NODE_ENV === 'development'
+        ? [
+            // {
+            //   text: 'Trigger Error (Test)',
+            //   icon: IconBug,
+            //   onClick: onTriggerError,
+            // },
+            {
+              text: t('View Message JSON'),
+              icon: IconCode,
+              onClick: onViewMessageJson,
+            },
+          ]
+        : []),
+      {
+        doubleCheck: true,
+        text: t('delete'),
+        icon: IconTrash,
+        onClick: onDelMsg,
+      },
+    ],
+    [t, msg.role, onReport, quoteMsg, onDelMsg, onTriggerError, onViewMessageJson]
+  )
+  const [actionMenuOpened, setActionMenuOpened] = useState(false)
 
   return (
     <Box
@@ -357,7 +309,7 @@ const _Message: FC<Props> = (props) => {
         msg.generating ? 'rendering' : 'render-done',
         { user: 'user-msg', system: 'system-msg', assistant: 'assistant-msg', tool: 'tool-msg' }[msg.role || 'user'],
         className,
-        widthFull ? 'w-full' : 'max-w-4xl mx-auto'
+        'w-full'
       )}
       sx={{
         paddingBottom: '0.1rem',
@@ -369,120 +321,27 @@ const _Message: FC<Props> = (props) => {
     >
       <Grid container wrap="nowrap" spacing={1.5}>
         <Grid item>
-          <Box className={cn(msg.role !== 'assistant' ? 'mt-1' : 'mt-2')}>
+          <Box className={cn('relative', msg.role !== 'assistant' ? 'mt-1' : 'mt-2')}>
             {
               {
-                assistant: currentSessionAssistantAvatarKey ? (
-                  <Avatar
-                    sx={{
-                      backgroundColor: theme.palette.primary.main,
-                      width: '28px',
-                      height: '28px',
-                    }}
-                    className="cursor-pointer"
-                    onClick={onClickAssistantAvatar}
-                  >
-                    <ImageInStorage
-                      storageKey={currentSessionAssistantAvatarKey}
-                      className="object-cover object-center w-full h-full"
-                    />
-                  </Avatar>
-                ) : currentSessionPicUrl ? (
-                  <Avatar
-                    src={currentSessionPicUrl}
-                    sx={{
-                      width: '28px',
-                      height: '28px',
-                    }}
-                    className="cursor-pointer"
+                assistant: (
+                  <AssistantAvatar
+                    avatarKey={assistantAvatarKey}
+                    picUrl={sessionPicUrl}
+                    sessionType={props.sessionType}
                     onClick={onClickAssistantAvatar}
                   />
-                ) : props.sessionType === 'picture' ? (
-                  <Avatar
-                    sx={{
-                      backgroundColor: theme.palette.secondary.main,
-                      width: '28px',
-                      height: '28px',
-                    }}
-                    className="cursor-pointer"
-                    onClick={onClickAssistantAvatar}
-                  >
-                    <ImageIcon fontSize="small" />
-                  </Avatar>
-                ) : defaultAssistantAvatarKey ? (
-                  <Avatar
-                    sx={{
-                      backgroundColor: theme.palette.primary.main,
-                      width: '28px',
-                      height: '28px',
-                    }}
-                    className="cursor-pointer"
-                    onClick={onClickAssistantAvatar}
-                  >
-                    <ImageInStorage
-                      storageKey={defaultAssistantAvatarKey}
-                      className="object-cover object-center w-full h-full"
-                    />
-                  </Avatar>
-                ) : (
-                  <Avatar
-                    sx={{
-                      backgroundColor: theme.palette.primary.main,
-                      width: '28px',
-                      height: '28px',
-                    }}
-                    className="cursor-pointer"
-                    onClick={onClickAssistantAvatar}
-                  >
-                    <SmartToyIcon fontSize="small" />
-                  </Avatar>
                 ),
-                user: (
-                  <Avatar
-                    sx={{
-                      width: '28px',
-                      height: '28px',
-                    }}
-                    className="cursor-pointer"
-                    onClick={() => {
-                      setOpenSettingWindow('chat')
-                      navigate({
-                        to: '/settings',
-                      })
-                    }}
-                  >
-                    {userAvatarKey ? (
-                      <ImageInStorage storageKey={userAvatarKey} className="object-cover object-center w-full h-full" />
-                    ) : (
-                      <PersonIcon fontSize="small" />
-                    )}
-                  </Avatar>
-                ),
-                system:
-                  props.sessionType === 'picture' ? (
-                    <Avatar
-                      sx={{
-                        backgroundColor: theme.palette.secondary.main,
-                        width: '28px',
-                        height: '28px',
-                      }}
-                    >
-                      <ImageIcon fontSize="small" />
-                    </Avatar>
-                  ) : (
-                    <Avatar
-                      sx={{
-                        backgroundColor: theme.palette.warning.main,
-                        width: '28px',
-                        height: '28px',
-                      }}
-                    >
-                      <SettingsIcon fontSize="small" />
-                    </Avatar>
-                  ),
+                user: <UserAvatar avatarKey={userAvatarKey} onClick={() => navigateToSettings('/chat')} />,
+                system: <SystemAvatar sessionType={props.sessionType} onClick={onClickAssistantAvatar} />,
                 tool: null,
               }[msg.role]
             }
+            {msg.role === 'assistant' && msg.generating && (
+              <Flex className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
+                <Loader size={32} className=" " classNames={{ root: "after:content-[''] after:border-[2px]" }} />
+              </Flex>
+            )}
           </Box>
         </Grid>
         <Grid item xs sm container sx={{ width: '0px', paddingRight: '15px' }}>
@@ -491,7 +350,7 @@ const _Message: FC<Props> = (props) => {
             <div
               className={cn(
                 'max-w-full inline-block',
-                msg.role !== 'assistant' ? 'bg-stone-400/10 dark:bg-blue-400/10 px-4 rounded-lg' : 'w-full'
+                msg.role !== 'assistant' ? 'bg-chatbox-background-secondary px-4 rounded-lg' : 'w-full'
               )}
             >
               <Box
@@ -504,7 +363,7 @@ const _Message: FC<Props> = (props) => {
                 {
                   // 这里的空行仅仅是为了在只发送文件时消息气泡的美观
                   // 正常情况下，应该考虑优化 msg-content 的样式。现在这里是一个临时的偷懒方式。
-                  getMessageText(msg).trim() === '' && <p></p>
+                  getMessageText(msg, true, true).trim() === '' && <p></p>
                 }
                 {contentParts && contentParts.length > 0 && (
                   <div>
@@ -521,83 +380,83 @@ const _Message: FC<Props> = (props) => {
                         <div key={`text-${msg.id}-${index}`}>
                           {enableMarkdownRendering && !isCollapsed ? (
                             <Markdown
+                              uniqueId={`${msg.id}-${index}`}
                               enableLaTeXRendering={enableLaTeXRendering}
                               enableMermaidRendering={enableMermaidRendering}
                               generating={msg.generating}
-                              preferCollapsedCodeBlock={
-                                autoCollapseCodeBlock &&
-                                (preferCollapsedCodeBlock || msg.role !== 'assistant' || previewArtifact)
-                              }
                             >
                               {item.text || ''}
                             </Markdown>
                           ) : (
-                            <div style={{ whiteSpace: 'pre-line' }}>
+                            <div className="break-words whitespace-pre-line">
                               {needCollapse && isCollapsed ? `${item.text.slice(0, collapseThreshold)}...` : item.text}
                               {needCollapse && isCollapsed && CollapseButton}
                             </div>
                           )}
                         </div>
                       ) : item.type === 'info' ? (
-                        <div key={`info-${item.text}`} className="mb-2">
-                          <Alert color="info" icon={<IconInfoCircle />}>
-                            {item.text}
-                          </Alert>
-                        </div>
+                        <Flex key={`info-${item.text}`} className="mb-2 ">
+                          <Flex
+                            className="bg-chatbox-background-brand-secondary border-0 border-l-2 border-solid border-chatbox-tint-brand rounded-r-md"
+                            align="center"
+                            gap="xxs"
+                            px="xs"
+                          >
+                            <ScalableIcon
+                              icon={IconInfoCircle}
+                              size={16}
+                              className="flex-none text-chatbox-tint-brand"
+                            />
+
+                            <Text size="xs" c="chatbox-brand">
+                              {item.text}
+                            </Text>
+                          </Flex>
+                        </Flex>
                       ) : item.type === 'image' ? (
                         props.sessionType !== 'picture' && (
-                          <div key={`image-${item.storageKey}`}>
-                            <div
-                              className="w-[100px] min-w-[100px] h-[100px] min-h-[100px]
-                                                    md:w-[200px] md:min-w-[200px] md:h-[200px] md:min-h-[200px]
-                                                    inline-flex items-center justify-center                                                                                                                                                  
-                                                    hover:cursor-pointer hover:border-slate-800/20 transition-all duration-200"
-                              onClick={() => showPicture(item.storageKey)}
-                            >
-                              {item.storageKey && <ImageInStorage storageKey={item.storageKey} className="w-full" />}
-                            </div>
+                          <div key={`image-${item.storageKey}`} className="mt-2">
+                            <PictureGallery key={`image-${item.storageKey}`} pictures={[item]} />
+                            {item.ocrResult && (
+                              <div
+                                className="my-2 p-2 bg-chatbox-background-brand-secondary rounded-md cursor-pointer hover:bg-chatbox-background-brand-secondary-hover transition-colors"
+                                onClick={async (e) => {
+                                  e.stopPropagation()
+                                  await NiceModal.show('ocr-content-viewer', { content: item.ocrResult })
+                                }}
+                              >
+                                <Typography variant="caption" className="text-gray-600 dark:text-gray-400 block mb-1">
+                                  {t('OCR Text')} ({item.ocrResult.length} {t('characters')})
+                                </Typography>
+                                <Typography
+                                  variant="body2"
+                                  className="line-clamp-2 text-gray-700 dark:text-gray-300"
+                                  title={item.ocrResult}
+                                >
+                                  {item.ocrResult}
+                                </Typography>
+                                <Typography
+                                  variant="caption"
+                                  className="text-blue-500 hover:text-blue-600 mt-1 inline-block"
+                                >
+                                  {t('Click to view full text')}
+                                </Typography>
+                              </div>
+                            )}
                           </div>
                         )
                       ) : item.type === 'tool-call' ? (
-                        <ToolCallPartUI key={item.toolCallId} part={item} />
+                        <ToolCallPartUI key={item.toolCallId} part={item as MessageToolCallPart} />
                       ) : null
                     )}
                   </div>
                 )}
               </Box>
-              {props.sessionType === 'picture' && (
-                <div className="flex flex-row items-start justify-start overflow-x-auto overflow-y-hidden">
-                  {msg.contentParts
-                    .filter((p) => p.type === 'image')
-                    .map((pic) => (
-                      <div
-                        key={pic.storageKey}
-                        className="w-[100px] min-w-[100px] h-[100px] min-h-[100px]
-                                                    md:w-[200px] md:min-w-[200px] md:h-[200px] md:min-h-[200px]
-                                                    p-1.5 mr-2 mb-2 inline-flex items-center justify-center
-                                                    bg-white dark:bg-slate-800
-                                                    border-solid border-slate-400/20 rounded-md
-                                                    hover:cursor-pointer hover:border-slate-800/20 transition-all duration-200"
-                        onClick={() => {
-                          setPictureShow({
-                            picture: pic,
-                            extraButtons:
-                              msg.role === 'assistant' && platform.type === 'mobile'
-                                ? [
-                                    {
-                                      onClick: onReport,
-                                      icon: <ReportIcon />,
-                                    },
-                                  ]
-                                : undefined,
-                          })
-                        }}
-                      >
-                        {pic.storageKey && <ImageInStorage className="w-full" storageKey={pic.storageKey} />}
-                        {'url' in pic && <Img src={pic.url as string} className="w-full" />}
-                      </div>
-                    ))}
-                </div>
+              {props.sessionType === 'picture' && msg.contentParts.filter((p) => p.type === 'image').length > 0 && (
+                <PictureGallery
+                  pictures={msg.contentParts.filter((p) => p.type === 'image')}
+                  onReport={platform.type === 'mobile' ? onReport : undefined}
+                />
               )}
               {(msg.files || msg.links) && (
                 <div className="flex flex-row items-start justify-start overflow-x-auto overflow-y-hidden pb-1">
@@ -611,153 +470,72 @@ const _Message: FC<Props> = (props) => {
               )}
               <MessageErrTips msg={msg} />
               {needCollapse && !isCollapsed && CollapseButton}
-              {needArtifact && (
-                <MessageArtifact
-                  sessionId={props.sessionId}
-                  messageId={msg.id}
-                  messageContent={getMessageText(msg)}
-                  preview={previewArtifact}
-                  setPreview={setPreviewArtifact}
-                />
-              )}
 
-              {msg.generating && <Loading />}
+              {msg.generating && msg.contentParts.length === 0 && <Loading />}
 
-              {tips.length > 0 && (
-                <Typography variant="body2" sx={{ opacity: 0.5 }} className="pb-1">
-                  {tips.join(', ')}
-                </Typography>
+              {!msg.generating && msg.role === 'assistant' && tips.length > 0 && (
+                <Text c="chatbox-tertiary">{tips.join(', ')}</Text>
               )}
             </div>
-            {!hiddenButtonGroup && (
-              <Box sx={{ height: '35px' }}>
-                {/* <Box sx={{ height: '35px' }} className='opacity-0 group-hover/message:opacity-100 delay-100 transition-all duration-100'> */}
-                <span
-                  className={cn(
-                    !anchorEl && !msg.generating ? 'hidden group-hover/message:inline-flex' : 'inline-flex'
-                  )}
+
+            {/* actions */}
+            {buttonGroup !== 'none' && !msg.generating && (
+              <Flex
+                gap={0}
+                m="4px -4px -4px -4px"
+                className={clsx(
+                  'group-hover/message:opacity-100 opacity-0 transition-opacity',
+                  actionMenuOpened || buttonGroup === 'always' ? 'opacity-100' : '',
+                  isSamllScreen ? 'sticky bottom-4' : ''
+                )}
+                align="center"
+              >
+                <Flex
+                  gap={0}
+                  className={
+                    isSamllScreen
+                      ? 'p-xxs bg-chatbox-background-primary rounded-md border-[0.5px] border-solid border-chatbox-border-primary shadow-sm'
+                      : ''
+                  }
                 >
-                  <ButtonGroup
-                    sx={{
-                      height: '35px',
-                      opacity: 1,
-                      ...(fixedButtonGroup
-                        ? {
-                            position: 'fixed',
-                            bottom: `${dom.getInputBoxHeight() + 4}px`,
-                            zIndex: 100,
-                            marginBottom: 'var(--mobile-safe-area-inset-bottom, 0px)',
-                          }
-                        : {}),
-                      backgroundColor:
-                        theme.palette.mode === 'dark' ? theme.palette.grey[800] : theme.palette.background.paper,
-                    }}
-                    variant="contained"
-                    color={props.sessionType === 'picture' ? 'secondary' : 'primary'}
-                    aria-label="message button group"
-                  >
-                    {msg.generating && (
-                      <Tooltip title={t('stop generating')} placement="top">
-                        <IconButton aria-label="edit" color="warning" onClick={handleStop}>
-                          <StopIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    )}
-                    {
-                      // 生成中的消息不显示刷新按钮，必须是助手消息
-                      !msg.generating && msg.role === 'assistant' && (
-                        <Tooltip title={t('Reply Again')} placement="top">
-                          <IconButton
-                            aria-label="Reply Again"
-                            onClick={handleRefresh}
-                            color={props.sessionType === 'picture' ? 'secondary' : 'primary'}
-                          >
-                            <ReplayIcon fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
+                  {!msg.generating && msg.role === 'assistant' && (
+                    <MessageActionIcon icon={IconReload} tooltip={t('Reply Again')} onClick={handleRefresh} />
+                  )}
+
+                  {msg.role !== 'assistant' && (
+                    <MessageActionIcon icon={IconArrowDown} tooltip={t('Reply Again Below')} onClick={onGenerateMore} />
+                  )}
+
+                  {
+                    // Chatbox-AI 模型不支持编辑消息
+                    !msg.model?.startsWith('Chatbox-AI') &&
+                      // 图片会话中，助手消息无需编辑
+                      !(msg.role === 'assistant' && props.sessionType === 'picture') && (
+                        <MessageActionIcon icon={IconPencil} tooltip={t('edit')} onClick={onEditClick} />
                       )
-                    }
-                    {msg.role !== 'assistant' && (
-                      <Tooltip title={t('Reply Again Below')} placement="top">
-                        <IconButton
-                          aria-label="Reply Again Below"
-                          onClick={onGenerateMore}
-                          color={props.sessionType === 'picture' ? 'secondary' : 'primary'}
-                        >
-                          <SouthIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    )}
-                    {
-                      // Chatbox-AI 模型不支持编辑消息
-                      !msg.model?.startsWith('Chatbox-AI') &&
-                        // 图片会话中，助手消息无需编辑
-                        !(msg.role === 'assistant' && props.sessionType === 'picture') && (
-                          <Tooltip title={t('edit')} placement="top">
-                            <IconButton
-                              aria-label="edit"
-                              color={props.sessionType === 'picture' ? 'secondary' : 'primary'}
-                              onClick={onEditClick}
-                            >
-                              <EditIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                        )
-                    }
-                    {!(props.sessionType === 'picture' && msg.role === 'assistant') && (
-                      <Tooltip title={t('copy')} placement="top">
-                        <IconButton
-                          aria-label="copy"
-                          onClick={onCopyMsg}
-                          color={props.sessionType === 'picture' ? 'secondary' : 'primary'}
-                        >
-                          <CopyAllIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    )}
-                    {!msg.generating && props.sessionType === 'picture' && msg.role === 'assistant' && (
-                      <Tooltip title={t('Generate More Images Below')} placement="top">
-                        <IconButton aria-label="copy" onClick={onGenerateMore} color="secondary">
-                          <AddPhotoAlternateIcon className="mr-1" fontSize="small" />
-                          <Typography fontSize="small">{t('More Images')}</Typography>
-                        </IconButton>
-                      </Tooltip>
-                    )}
-                    <IconButton onClick={handleClick} color={props.sessionType === 'picture' ? 'secondary' : 'primary'}>
-                      <MoreVertIcon fontSize="small" />
-                    </IconButton>
-                    <StyledMenu
-                      MenuListProps={{
-                        'aria-labelledby': 'demo-customized-button',
-                      }}
-                      anchorEl={anchorEl}
-                      open={open}
-                      onClose={handleClose}
-                      key={`${msg.id}menu`}
-                    >
-                      <MenuItem
-                        key={`${msg.id}quote`}
-                        onClick={() => {
-                          setAnchorEl(null)
-                          quoteMsg()
-                        }}
-                        disableRipple
-                        divider
-                      >
-                        <FormatQuoteIcon fontSize="small" />
-                        {t('quote')}
-                      </MenuItem>
-                      {msg.role === 'assistant' && platform.type === 'mobile' && (
-                        <MenuItem key={`${msg.id}report`} onClick={onReport} disableRipple>
-                          <ReportIcon fontSize="small" />
-                          {t('report')}
-                        </MenuItem>
-                      )}
-                      <ConfirmDeleteMenuItem onDelete={onDelMsg} />
-                    </StyledMenu>
-                  </ButtonGroup>
-                </span>
-              </Box>
+                  }
+
+                  {!(props.sessionType === 'picture' && msg.role === 'assistant') && (
+                    <MessageActionIcon icon={IconCopy} tooltip={t('copy')} onClick={onCopyMsg} />
+                  )}
+
+                  {!msg.generating && props.sessionType === 'picture' && msg.role === 'assistant' && (
+                    <MessageActionIcon
+                      icon={IconPhotoPlus}
+                      tooltip={t('Generate More Images Below')}
+                      onClick={onGenerateMore}
+                    />
+                  )}
+
+                  <ActionMenu
+                    items={actionMenuItems}
+                    opened={actionMenuOpened}
+                    onChange={(opened) => setActionMenuOpened(opened)}
+                  >
+                    <MessageActionIcon icon={IconDotsVertical} tooltip={t('More')} />
+                  </ActionMenu>
+                </Flex>
+              </Flex>
             )}
           </Grid>
         </Grid>
@@ -767,3 +545,177 @@ const _Message: FC<Props> = (props) => {
 }
 
 export default memo(_Message)
+
+function getBase64ImageSize(base64: string): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => {
+      resolve({ width: img.width, height: img.height })
+    }
+    img.onerror = (err) => {
+      reject(err)
+    }
+    img.src = base64
+  })
+}
+
+type PictureGalleryProps = {
+  pictures: MessagePicture[]
+  onReport?(picture: MessagePicture): void
+}
+
+const PictureGallery = memo(({ pictures, onReport }: PictureGalleryProps) => {
+  const isSmallScreen = useIsSmallScreen()
+  const uiElements: UIElementData[] = concat(
+    [
+      {
+        name: 'custom-download-button',
+        ariaLabel: 'Download',
+        order: 9,
+        isButton: true,
+        html: {
+          isCustomSVG: true,
+          inner:
+            '<path d="M20.5 14.3 17.1 18V10h-2.2v7.9l-3.4-3.6L10 16l6 6.1 6-6.1ZM23 23H9v2h14Z" id="pswp__icn-download"/>',
+          outlineID: 'pswp__icn-download',
+        },
+        appendTo: 'bar',
+        onClick: async (_e, _el, pswp) => {
+          const picture = pictures[pswp.currIndex]
+          if (picture.storageKey) {
+            const base64 = await storage.getBlob(picture.storageKey)
+            if (!base64) {
+              return
+            }
+            // storageKey中含有冒号，会在android端导致存储失败，且android端在同文件名的情况下不会再次保存图片，也无提示，可能对用户造成困扰，所以增加随机后缀
+            const filename =
+              platform.type === 'mobile'
+                ? `${picture.storageKey.replaceAll(':', '_')}_${Math.random().toString(36).substring(7)}`
+                : picture.storageKey
+            platform.exporter.exportImageFile(filename, base64)
+          } else if (picture.url) {
+            platform.exporter.exportByUrl(`image_${Math.random().toString(36).substring(7)}`, picture.url)
+          }
+        },
+      },
+    ],
+    onReport
+      ? [
+          {
+            name: 'report-button',
+            ariaLabel: 'Report',
+            order: 8,
+            isButton: true,
+            html: {
+              isCustomSVG: true,
+              inner:
+                '<path d="M 16 6 A 10 10 0 0 1 16 26 L 16 24 A 8 8 0 0 0 16 8 L 16 6 A 10 10 0 0 0 16 26 L 16 24 A 8 8 0 0 1 16 8 M 15 11 A 1 1 0 0 1 17 11 L 17 16 A 1 1 0 0 1 15 16 M 16 19 A 1.5 1.5 0 0 1 16 22 A 1.5 1.5 0 0 1 16 19 Z" id="pswp__icn-report">',
+              outlineID: 'pswp__icn-report',
+            },
+            appendTo: 'bar',
+            onClick: (_e, _el, pswp) => {
+              const picture = pictures[pswp.currIndex]
+              pswp.close()
+              onReport(picture)
+            },
+          },
+        ]
+      : []
+  )
+  return (
+    <Flex gap="sm" wrap="wrap">
+      <Gallery uiElements={uiElements}>
+        {pictures.map((p) =>
+          p.storageKey ? (
+            <ImageInStorageGalleryItem key={p.storageKey} storageKey={p.storageKey} />
+          ) : p.url ? (
+            <GalleryItem key={p.url} original={p.url} thumbnail={p.url} width={1024} height={1024}>
+              {({ ref, open }) => (
+                <Img
+                  src={p.url}
+                  h={isSmallScreen ? 100 : 200}
+                  w="auto"
+                  fit="contain"
+                  radius="md"
+                  ref={ref}
+                  onClick={open}
+                  className="cursor-pointer"
+                />
+              )}
+            </GalleryItem>
+          ) : undefined
+        )}
+      </Gallery>
+    </Flex>
+  )
+})
+
+const ImageInStorageGalleryItem = ({ storageKey }: { storageKey: string }) => {
+  const isSmallScreen = useIsSmallScreen()
+  const { data: pic } = useQuery({
+    queryKey: ['image-in-storage-gallery-item', storageKey],
+    queryFn: async ({ queryKey: [, key] }) => {
+      const blob = await storage.getBlob(key)
+      const base64 = blob?.startsWith('data:image/') ? blob : `data:image/png;base64,${blob}`
+      const size = await getBase64ImageSize(base64)
+      return {
+        storageKey,
+        ...size,
+        data: base64,
+      }
+    },
+    staleTime: Infinity,
+  })
+
+  return pic ? (
+    <GalleryItem original={pic.data} thumbnail={pic.data} width={pic.width} height={pic.height}>
+      {({ ref, open }) => (
+        <Img
+          src={pic.data}
+          h={isSmallScreen ? 100 : 200}
+          w="auto"
+          fit="contain"
+          radius="md"
+          ref={ref}
+          onClick={open}
+          className="cursor-pointer"
+        />
+      )}
+    </GalleryItem>
+  ) : null
+}
+
+export const MessageActionIcon = forwardRef<
+  HTMLButtonElement,
+  ActionIconProps & {
+    tooltip?: string | null
+    onClick?: MouseEventHandler<HTMLButtonElement>
+    icon: React.ElementType<IconProps>
+  }
+>(({ tooltip, icon, ...props }, ref) => {
+  const isSmallScreen = useIsSmallScreen()
+  const actionIcon = (
+    <ActionIcon
+      ref={ref}
+      variant="subtle"
+      w="auto"
+      h="auto"
+      miw="auto"
+      mih="auto"
+      p={4}
+      bd={0}
+      color="chatbox-secondary"
+      {...props}
+    >
+      <ScalableIcon icon={icon} size={isSmallScreen ? 20 : 16} />
+    </ActionIcon>
+  )
+
+  return tooltip ? (
+    <Tooltip1 label={tooltip} openDelay={1000} withArrow>
+      {actionIcon}
+    </Tooltip1>
+  ) : (
+    actionIcon
+  )
+})

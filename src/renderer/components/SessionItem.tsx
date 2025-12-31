@@ -1,175 +1,149 @@
 import NiceModal from '@ebay/nice-modal-react'
-import ChatBubbleOutlineOutlinedIcon from '@mui/icons-material/ChatBubbleOutlineOutlined'
-import CopyIcon from '@mui/icons-material/CopyAll'
-import EditIcon from '@mui/icons-material/Edit'
-import MoreHorizOutlinedIcon from '@mui/icons-material/MoreHorizOutlined'
-import StarIcon from '@mui/icons-material/Star'
-import StarOutlineIcon from '@mui/icons-material/StarOutline'
-import VrpanoIcon from '@mui/icons-material/Vrpano'
-import { Avatar, IconButton, ListItemIcon, ListItemText, MenuItem, Typography, useTheme } from '@mui/material'
-import { useSetAtom } from 'jotai'
-import React, { useMemo } from 'react'
+import { ActionIcon, Flex, Text } from '@mantine/core'
+import { IconCopy, IconDots, IconEdit, IconStar, IconStarFilled, IconTrash } from '@tabler/icons-react'
+import clsx from 'clsx'
+import { memo, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { SessionMeta } from '@/../shared/types'
-import { ImageInStorage } from '@/components/Image'
+import type { SessionMeta } from 'src/shared/types'
 import { useIsSmallScreen } from '@/hooks/useScreenChange'
-import { cn } from '@/lib/utils'
-import * as atoms from '@/stores/atoms'
-import * as sessionActions from '@/stores/sessionActions'
-import { getSessionAsync, removeSession, saveSession } from '@/stores/sessionStorageMutations'
-import { ConfirmDeleteMenuItem } from './ConfirmDeleteButton'
-import StyledMenu from './StyledMenu'
+import { router } from '@/router'
+import {
+  deleteSession as deleteSessionStore,
+  getSession,
+  updateSession as updateSessionStore,
+} from '@/stores/chatStore'
+import { copyAndSwitchSession, switchCurrentSession } from '@/stores/sessionActions'
+import { useUIStore } from '@/stores/uiStore'
+import ActionMenu, { type ActionMenuItemProps } from './ActionMenu'
+import { AssistantAvatar } from './Avatar'
+import { ScalableIcon } from './ScalableIcon'
 
 export interface Props {
   session: SessionMeta
   selected: boolean
 }
 
-function _SessionItem(props: Props) {
+function SessionItem(props: Props) {
   const { session, selected } = props
   const { t } = useTranslation()
-  const [anchorEl, setAnchorEl] = React.useState<null | HTMLElement>(null)
-  const open = Boolean(anchorEl)
-  const setShowSidebar = useSetAtom(atoms.showSidebarAtom)
-  const handleMenuClick = (event: React.MouseEvent<HTMLElement>) => {
-    event.stopPropagation()
-    event.preventDefault()
-    setAnchorEl(event.currentTarget)
-  }
-  const handleMenuClose = () => {
-    setAnchorEl(null)
-  }
+  const setShowSidebar = useUIStore((s) => s.setShowSidebar)
   const onClick = () => {
-    sessionActions.switchCurrentSession(session.id)
+    switchCurrentSession(session.id)
     if (isSmallScreen) {
       setShowSidebar(false)
     }
   }
-  const theme = useTheme()
-  const medianSize = theme.typography.pxToRem(24)
   const isSmallScreen = useIsSmallScreen()
   // const smallSize = theme.typography.pxToRem(20)
-  return (
-    <>
-      <MenuItem
-        key={session.id}
-        selected={selected}
-        onClick={onClick}
-        sx={{ padding: '0.1rem', margin: '0.1rem' }}
-        className="group/session-item"
-      >
-        <ListItemIcon>
-          <IconButton onClick={onClick}>
-            {session.assistantAvatarKey ? (
-              <Avatar
-                sizes={medianSize}
-                sx={{
-                  width: medianSize,
-                  height: medianSize,
-                  backgroundColor: theme.palette.primary.main,
-                }}
-              >
-                <ImageInStorage
-                  storageKey={session.assistantAvatarKey}
-                  className="object-cover object-center w-full h-full"
-                />
-              </Avatar>
-            ) : session.picUrl ? (
-              <Avatar sizes={medianSize} sx={{ width: medianSize, height: medianSize }} src={session.picUrl} />
-            ) : session.type === 'picture' ? (
-              <VrpanoIcon fontSize="small" />
-            ) : (
-              <ChatBubbleOutlineOutlinedIcon fontSize="small" />
-            )}
-          </IconButton>
-        </ListItemIcon>
-        <ListItemText>
-          <Typography variant="inherit" noWrap>
-            {session.name}
-          </Typography>
-        </ListItemText>
-        <span
-          className={cn(
-            session.starred || anchorEl || isSmallScreen ? 'inline-flex' : 'hidden group-hover/session-item:inline-flex'
-          )}
-        >
-          <IconButton onClick={handleMenuClick} sx={{ color: 'primary.main' }}>
-            {session.starred ? <StarIcon fontSize="small" /> : <MoreHorizOutlinedIcon fontSize="small" />}
-          </IconButton>
-        </span>
-      </MenuItem>
-      <StyledMenu
-        MenuListProps={{
-          'aria-labelledby': 'long-button',
-        }}
-        anchorEl={anchorEl}
-        open={open}
-        onClose={handleMenuClose}
-      >
-        <MenuItem
-          key={`${session.id}edit`}
-          onClick={async () => {
-            NiceModal.show('session-settings', {
-              session: await getSessionAsync(session.id),
-            })
-            handleMenuClose()
-          }}
-          disableRipple
-        >
-          <EditIcon fontSize="small" />
-          {t('edit')}
-        </MenuItem>
 
-        <MenuItem
-          key={`${session.id}copy`}
-          onClick={() => {
-            sessionActions.copy(session)
-            handleMenuClose()
+  const [menuOpened, setMenuOpened] = useState(false)
+
+  const actionMenuItems = useMemo<ActionMenuItemProps[]>(
+    () => [
+      {
+        text: t('edit'),
+        icon: IconEdit,
+        onClick: async () => {
+          await NiceModal.show('session-settings', {
+            session: await getSession(session.id),
+          })
+        },
+      },
+      {
+        text: t('copy'),
+        icon: IconCopy,
+        onClick: () => {
+          copyAndSwitchSession(session)
+        },
+      },
+      {
+        text: session.starred ? t('unstar') : t('star'),
+        icon: session.starred ? IconStarFilled : IconStar,
+        onClick: () => {
+          void updateSessionStore(session.id, (s) => {
+            if (!s) {
+              throw new Error(`Session ${session.id} not found`)
+            }
+            return { ...s, starred: !s?.starred }
+          })
+        },
+      },
+      { divider: true },
+      {
+        doubleCheck: true,
+        text: t('delete'),
+        icon: IconTrash,
+        onClick: async () => {
+          try {
+            await deleteSessionStore(session.id)
+            // Only navigate if deleting the currently selected session
+            if (selected) {
+              router.navigate({ to: '/', replace: true })
+            }
+          } catch (error) {
+            console.error('Failed to delete session:', error)
+          }
+        },
+      },
+    ],
+    [session, selected, t]
+  )
+
+  return (
+    <Flex
+      align="center"
+      className={clsx(
+        'cursor-pointer rounded-sm group/session-item',
+        isSmallScreen
+          ? ''
+          : selected
+            ? 'bg-chatbox-background-brand-secondary'
+            : 'hover:bg-chatbox-background-gray-secondary'
+      )}
+      mx="xs"
+      px="xs"
+      py={10}
+      gap={10}
+      onClick={onClick}
+    >
+      <AssistantAvatar
+        avatarKey={session.assistantAvatarKey}
+        picUrl={session.picUrl}
+        sessionType={session.type}
+        size="sm"
+        type="chat"
+        c={selected ? 'chatbox-brand' : 'chatbox-primary'}
+      />
+
+      <Text span flex={1} lineClamp={1} c={selected ? 'chatbox-brand' : 'chatbox-primary'}>
+        {session.name}
+      </Text>
+
+      <ActionMenu
+        items={actionMenuItems}
+        position="bottom-start"
+        opened={menuOpened}
+        onChange={(opened) => setMenuOpened(opened)}
+      >
+        <ActionIcon
+          variant="transparent"
+          size={20}
+          color={session.starred ? 'chatbox-brand' : 'chatbox-tertiary'}
+          className={isSmallScreen || session.starred || menuOpened ? '' : 'group-hover/session-item:visible invisible'}
+          onClick={(event) => {
+            event.stopPropagation()
+            event.preventDefault()
           }}
-          disableRipple
-        >
-          <CopyIcon fontSize="small" />
-          {t('copy')}
-        </MenuItem>
-        <MenuItem
-          key={`${session.id}star`}
-          onClick={() => {
-            saveSession({
-              id: session.id,
-              starred: !session.starred,
-            })
-            handleMenuClose()
-          }}
-          disableRipple
-          divider
         >
           {session.starred ? (
-            <>
-              <StarOutlineIcon fontSize="small" />
-              {t('unstar')}
-            </>
+            <ScalableIcon icon={IconStarFilled} className="text-inherit" size={16} />
           ) : (
-            <>
-              <StarIcon fontSize="small" />
-              {t('star')}
-            </>
+            <ScalableIcon icon={IconDots} className="text-inherit" size={16} />
           )}
-        </MenuItem>
-
-        <ConfirmDeleteMenuItem
-          onDelete={() => {
-            setAnchorEl(null)
-            handleMenuClose()
-            removeSession(session.id)
-          }}
-        />
-      </StyledMenu>
-    </>
+        </ActionIcon>
+      </ActionMenu>
+    </Flex>
   )
 }
 
-export default function Session(props: Props) {
-  return useMemo(() => {
-    return <_SessionItem {...props} />
-  }, [props.session, props.selected])
-}
+export default memo(SessionItem)

@@ -1,9 +1,10 @@
-import { clsx, type ClassValue } from 'clsx'
-import { twMerge } from 'tailwind-merge'
-import log from 'electron-log/renderer'
-import { getDefaultStore } from 'jotai'
-import { initLogAtom } from '@/stores/atoms/utilAtoms'
+import { type ClassValue, clsx } from 'clsx'
 import dayjs from 'dayjs'
+import { getDefaultStore } from 'jotai'
+import { twMerge } from 'tailwind-merge'
+import platform from '@/platform'
+import { initLogAtom } from '@/stores/atoms/utilAtoms'
+
 // Re-export from shared layer for backward compatibility
 export { parseJsonOrEmpty } from '../../shared/utils/json_utils'
 
@@ -20,6 +21,9 @@ export function getLogger(logId: string) {
       const store = getDefaultStore()
       const now = dayjs().format('HH:mm:ss.SSS')
       store.set(initLogAtom, [...store.get(initLogAtom), `[${now}][${logId}] ${args.join(' ')}`])
+      platform.appLog(level, args.join(' ')).catch((e) => {
+        console.error('Failed to send log to main process', e)
+      })
     },
     info(...args: any[]) {
       this.log('info', ...args)

@@ -10,19 +10,18 @@ import {
   Typography,
   useTheme,
 } from '@mui/material'
-import { useAtom } from 'jotai'
-import { uniq, uniqBy } from 'lodash'
+import { uniqBy } from 'lodash'
 import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import type { Settings } from 'src/shared/types'
+import { Accordion, AccordionDetails, AccordionSummary } from '@/components/Accordion'
+import { ShortcutConfig } from '@/components/Shortcut'
+import TextFieldReset from '@/components/TextFieldReset'
 import { useIsSmallScreen } from '@/hooks/useScreenChange'
+import platform from '@/platform'
+import storage, { StorageKey } from '@/storage'
 import { migrateOnData } from '@/stores/migration'
-import type { Settings } from '../../../shared/types'
-import { Accordion, AccordionDetails, AccordionSummary } from '../../components/Accordion'
-import { ShortcutConfig } from '../../components/Shortcut'
-import TextFieldReset from '../../components/TextFieldReset'
-import platform from '../../platform'
-import storage, { StorageKey } from '../../storage'
-import * as atoms from '../../stores/atoms'
+import { settingsStore, useSettingsStore } from '@/stores/settingsStore'
 
 interface Props {
   settingsEdit: Settings
@@ -340,13 +339,17 @@ export function AnalyticsSetting() {
 
 export function AllowReportingAndTrackingCheckbox(props: { className?: string }) {
   const { t } = useTranslation()
-  const [allowReportingAndTracking, setAllowReportingAndTracking] = useAtom(atoms.allowReportingAndTrackingAtom)
+  const allowReportingAndTracking = useSettingsStore((state) => state.allowReportingAndTracking)
   return (
     <span className={props.className}>
       <input
         type="checkbox"
         checked={allowReportingAndTracking}
-        onChange={(e) => setAllowReportingAndTracking(e.target.checked)}
+        onChange={(e) =>
+          settingsStore.setState({
+            allowReportingAndTracking: e.target.checked,
+          })
+        }
       />
       {t('Enable optional anonymous reporting of crash and event data')}
     </span>

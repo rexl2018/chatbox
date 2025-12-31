@@ -17,7 +17,7 @@ interface Options {
   dalleStyle: 'vivid' | 'natural'
   temperature?: number
   topP?: number
-  maxTokens?: number
+  maxOutputTokens?: number
   stream?: boolean
 }
 
@@ -81,16 +81,14 @@ export default class ChatboxAI extends AbstractAISDKModel implements ModelInterf
     return {
       temperature: this.options.temperature,
       topP: this.options.topP,
-      maxTokens: this.options.maxTokens,
+      maxOutputTokens: this.options.maxOutputTokens,
     }
   }
 
   getChatModel(options: CallChatCompletionOptions) {
     const provider = this.getProvider(options)
     if (this.options.model.apiStyle === 'google') {
-      return (provider as GoogleGenerativeAIProvider).chat(this.options.model.modelId, {
-        structuredOutputs: false,
-      })
+      return (provider as GoogleGenerativeAIProvider).chat(this.options.model.modelId)
     } else {
       return provider.languageModel(this.options.model.modelId)
     }

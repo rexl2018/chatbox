@@ -1,63 +1,89 @@
-import { createModelDependencies } from '@/adapters'
-import { ModelList } from '@/components/ModelList'
-import PopoverConfirm from '@/components/PopoverConfirm'
-import { useProviderSettings, useSettings } from '@/hooks/useSettings'
-import { streamText } from '@/packages/model-calls'
-import { getModelSettingUtil } from '@/packages/model-setting-utils'
-import platform from '@/platform'
-import { add as addToast } from '@/stores/toastActions'
 import NiceModal from '@ebay/nice-modal-react'
 import {
+  Badge,
   Button,
   Flex,
-  Modal,
+  Loader,
   PasswordInput,
-  ScrollArea,
   Select,
   Stack,
   Switch,
   Text,
   TextInput,
   Title,
-  Tooltip
+  Tooltip,
 } from '@mantine/core'
 import {
-  IconBulb,
-  IconCircleMinus,
-  IconCirclePlus,
+  IconCircleCheck,
   IconDiscount2,
   IconExternalLink,
-  IconEye,
+  IconHelpCircle,
   IconPlus,
   IconRefresh,
   IconRestore,
-  IconTool,
-  IconTrash
+  IconTrash,
+  IconX,
 } from '@tabler/icons-react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
-import { type ChangeEvent, useState } from 'react'
+import { uniq } from 'lodash'
+import { type ChangeEvent, useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { SystemProviders } from 'src/shared/defaults'
-import { getModel } from 'src/shared/models'
-import {
-  MessageRoleEnum,
-  type ModelOptionGroup,
-  ModelProviderEnum,
-  ModelProviderType,
-  type ProviderModelInfo,
-} from 'src/shared/types'
+import { ModelProviderEnum, ModelProviderType, type ProviderModelInfo } from 'src/shared/types'
 import {
   normalizeAzureEndpoint,
   normalizeClaudeHost,
   normalizeGeminiHost,
   normalizeOpenAIApiHostAndPath,
+  normalizeOpenAIResponsesHostAndPath,
 } from 'src/shared/utils'
+import { createModelDependencies } from '@/adapters'
+import { ModelList } from '@/components/ModelList'
+import { Modal } from '@/components/Overlay'
+import PopoverConfirm from '@/components/PopoverConfirm'
+import { ScalableIcon } from '@/components/ScalableIcon'
+import { getModelSettingUtil } from '@/packages/model-setting-utils'
+import platform from '@/platform'
+import { useLanguage, useProviderSettings, useSettingsStore } from '@/stores/settingsStore'
+import { add as addToast } from '@/stores/toastActions'
+import { type ModelTestState, testModelCapabilities } from '@/utils/model-tester'
 
 export const Route = createFileRoute('/settings/provider/$providerId')({
   component: RouteComponent,
 })
 
-function RouteComponent() {
+type ModelTestResult = ModelTestState & {
+  modelId: string
+  modelName: string
+}
+
+function normalizeAPIHost(
+  providerSettings: any,
+  providerType: ModelProviderType
+): {
+  apiHost: string
+  apiPath: string
+} {
+  switch (providerType) {
+    case ModelProviderType.Claude:
+      return normalizeClaudeHost(providerSettings?.apiHost || '')
+    case ModelProviderType.Gemini:
+      return normalizeGeminiHost(providerSettings?.apiHost || '')
+    case ModelProviderType.OpenAIResponses:
+      return normalizeOpenAIResponsesHostAndPath({
+        apiHost: providerSettings?.apiHost,
+        apiPath: providerSettings?.apiPath,
+      })
+    case ModelProviderType.OpenAI:
+    default:
+      return normalizeOpenAIApiHostAndPath({
+        apiHost: providerSettings?.apiHost,
+        apiPath: providerSettings?.apiPath,
+      })
+  }
+}
+
+export function RouteComponent() {
   const { providerId } = Route.useParams()
   return <ProviderSettings key={providerId} providerId={providerId} />
 }
@@ -65,7 +91,10 @@ function RouteComponent() {
 function ProviderSettings({ providerId }: { providerId: string }) {
   const navigate = useNavigate()
   const { t } = useTranslation()
-  const { settings, setSettings } = useSettings()
+  const { setSettings, ...settings } = useSettingsStore((state) => state)
+
+  const language = useLanguage()
+
   const baseInfo = [...SystemProviders, ...(settings.customProviders || [])].find((p) => p.id === providerId)
 
   const { providerSettings, setProviderSettings } = useProviderSettings(providerId)
@@ -91,7 +120,7 @@ function ProviderSettings({ providerId }: { providerId: string }) {
   }
 
   const handleAddModel = async () => {
-    const newModel: ProviderModelInfo = await NiceModal.show('model-edit', {})
+    const newModel: ProviderModelInfo = await NiceModal.show('model-edit', { providerId })
     if (!newModel?.modelId) {
       return
     }
@@ -107,7 +136,7 @@ function ProviderSettings({ providerId }: { providerId: string }) {
   }
 
   const editModel = async (model: ProviderModelInfo) => {
-    const newModel: ProviderModelInfo = await NiceModal.show('model-edit', { model })
+    const newModel: ProviderModelInfo = await NiceModal.show('model-edit', { model, providerId })
     if (!newModel?.modelId) {
       return
     }
@@ -136,76 +165,89 @@ function ProviderSettings({ providerId }: { providerId: string }) {
     try {
       setFetchedModels(undefined)
       setFetchingModels(true)
-      const modelConfig = getModelSettingUtil(baseInfo!.id)
+      const modelConfig = getModelSettingUtil(baseInfo!.id, baseInfo!.isCustom ? baseInfo!.type : undefined)
       const modelList = await modelConfig.getMergeOptionGroups({
         ...baseInfo?.defaultSettings,
         ...providerSettings,
       })
 
       if (modelList.length) {
-        setFetchedModels(
-          modelList
-            .reduce((pre, cur) => [...pre, ...cur.options], [] as ModelOptionGroup['options'])
-            .map((option) => ({ modelId: option.value }) as ProviderModelInfo)
-        )
+        setFetchedModels(modelList)
       } else {
         addToast(t('Failed to fetch models'))
       }
       setFetchingModels(false)
     } catch (error) {
+      console.error('Failed to fetch models', error)
       setFetchedModels(undefined)
       setFetchingModels(false)
     }
   }
+  const [selectedTestModel, setSelectedTestModel] = useState<string>()
+  const [showTestModelSelector, setShowTestModelSelector] = useState(false)
+  const [modelTestResult, setModelTestResult] = useState<ModelTestResult | null>(null)
+  const checkModel =
+    selectedTestModel || baseInfo?.defaultSettings?.models?.[0]?.modelId || providerSettings?.models?.[0]?.modelId
 
-  const [apiKeyAvaliable, setApiKeyAvaliable] = useState<boolean>()
-  const [apiKeyChecking, setApiKeyChecking] = useState(false)
-  const [apiKeyCheckingError, setApiKeyCheckingError] = useState<string>()
-  const checkModel = baseInfo?.defaultSettings?.models?.[0]?.modelId || providerSettings?.models?.[0]?.modelId
-  const handleCheckApiKey = async () => {
-    try {
-      setApiKeyChecking(true)
+  const handleCheckApiKey = async (modelId?: string) => {
+    const testModel = modelId || checkModel
+    if (!testModel) return
+
+    // Find the model info
+    const modelInfo = displayModels.find((m) => m.modelId === testModel)
+    if (!modelInfo) return
+
+    // Use the same testing modal as handleCheckModel
+    await handleCheckModel(modelInfo)
+  }
+
+  const handleCheckModel = useCallback(
+    async (model: ProviderModelInfo) => {
+      // Initialize result with model info
+      const result: ModelTestResult = {
+        modelId: model.modelId,
+        modelName: model.nickname || model.modelId,
+        testing: true,
+        basicTest: { status: 'pending' },
+        visionTest: { status: 'pending' },
+        toolTest: { status: 'pending' },
+      }
+      setModelTestResult(result)
+
       const configs = await platform.getConfig()
       const dependencies = await createModelDependencies()
-      const modelInstance = getModel(
-        {
-          ...settings,
-          provider: providerId as any,
-          modelId: checkModel,
-        },
+
+      const finalState = await testModelCapabilities({
+        providerId,
+        modelId: model.modelId,
+        settings,
         configs,
-        dependencies
-      )
-      await streamText(modelInstance, {
-        messages: [
-          {
-            id: '',
-            role: MessageRoleEnum.User,
-            contentParts: [
-              {
-                type: 'text',
-                text: 'test',
-              },
-            ],
-          },
-        ],
-        onResultChangeWithCancel: (result) => {
-          console.log(result)
+        dependencies,
+        onStateChange: (state) => {
+          setModelTestResult({
+            ...result,
+            ...state,
+          })
         },
       })
-      setApiKeyAvaliable(true)
-    } catch (e: any) {
-      try {
-        const errorMessage = JSON.parse(e.responseBody)
-        setApiKeyCheckingError(JSON.stringify(errorMessage, null, 2))
-      } catch {
-        setApiKeyCheckingError(e?.responseBody || e?.message || e?.error?.message || String(e))
+      const visionSupported = finalState.visionTest?.status === 'success'
+      const toolUseSupported = finalState.toolTest?.status === 'success'
+      if (visionSupported || toolUseSupported) {
+        const capabilitiesToAdd: ('vision' | 'tool_use')[] = []
+        if (visionSupported) capabilitiesToAdd.push('vision')
+        if (toolUseSupported) capabilitiesToAdd.push('tool_use')
+        console.log('Auto-enable capabilities based on test results')
+        setProviderSettings({
+          models: displayModels.map((m) =>
+            m.modelId === model.modelId
+              ? { ...m, capabilities: uniq([...(m.capabilities || []), ...capabilitiesToAdd]) }
+              : m
+          ),
+        })
       }
-      setApiKeyAvaliable(false)
-    } finally {
-      setApiKeyChecking(false)
-    }
-  }
+    },
+    [displayModels, setProviderSettings, providerId]
+  )
 
   if (!baseInfo) {
     return <Text>{t('Provider not found')}</Text>
@@ -225,7 +267,7 @@ function ProviderSettings({ providerId }: { providerId: string }) {
             h={24}
             onClick={() => platform.openLink(baseInfo.urls!.website!)}
           >
-            <IconExternalLink size={24} />
+            <ScalableIcon icon={IconExternalLink} size={24} />
           </Button>
         )}
         {baseInfo.isCustom && (
@@ -242,12 +284,22 @@ function ProviderSettings({ providerId }: { providerId: string }) {
             <Button
               variant="transparent"
               size="compact-xs"
-              leftSection={<IconTrash size={24} />}
+              leftSection={<ScalableIcon icon={IconTrash} size={24} />}
               color="chatbox-error"
             ></Button>
           </PopoverConfirm>
         )}
       </Flex>
+      {baseInfo.isCustom && language === 'zh-Hans' && (
+        <Flex>
+          <ScalableIcon icon={IconHelpCircle} />
+          <Text span size="xs" c="chatbox-tertiary">
+            <a href="https://docs.chatboxai.app/guides/providers" target="_blank" rel="noopener">
+              {t('Setup guide')}
+            </a>
+          </Text>
+        </Flex>
+      )}
 
       <Stack gap="xl">
         {/* custom provider base info */}
@@ -276,15 +328,43 @@ function ProviderSettings({ providerId }: { providerId: string }) {
               </Text>
               <Select
                 value={baseInfo.type}
+                onChange={(value) => {
+                  setSettings({
+                    customProviders: settings.customProviders?.map((p) =>
+                      p.id === baseInfo.id ? { ...p, type: value as ModelProviderType } : p
+                    ),
+                  })
+                }}
                 data={[
                   {
                     value: ModelProviderType.OpenAI,
                     label: t('OpenAI API Compatible'),
                   },
+                  {
+                    value: ModelProviderType.OpenAIResponses,
+                    label: t('OpenAI Responses API Compatible'),
+                  },
+                  {
+                    value: ModelProviderType.Claude,
+                    label: t('Claude API Compatible'),
+                  },
+                  {
+                    value: ModelProviderType.Gemini,
+                    label: t('Google Gemini API Compatible'),
+                  },
                 ]}
               />
             </Stack>
           </>
+        )}
+
+        {/* Provider description */}
+        {baseInfo.description && (
+          <Stack gap="xxs">
+            <Text span size="xs" c="chatbox-tertiary">
+              {t(baseInfo.description)}
+            </Text>
+          </Stack>
         )}
 
         {/* API Key */}
@@ -296,44 +376,32 @@ function ProviderSettings({ providerId }: { providerId: string }) {
             <Flex gap="xs" align="center">
               <PasswordInput flex={1} value={providerSettings?.apiKey || ''} onChange={handleApiKeyChange} />
               <Tooltip
-                disabled={!!providerSettings?.apiKey && !!checkModel}
+                disabled={!!providerSettings?.apiKey && displayModels.length > 0}
                 label={
                   !providerSettings?.apiKey
                     ? t('API Key is required to check connection')
-                    : !checkModel
+                    : displayModels.length === 0
                       ? t('Add at least one model to check connection')
                       : null
                 }
               >
                 <Button
                   size="sm"
-                  disabled={!providerSettings?.apiKey || !checkModel}
-                  loading={apiKeyChecking}
-                  onClick={handleCheckApiKey}
+                  disabled={!providerSettings?.apiKey || displayModels.length === 0}
+                  loading={modelTestResult?.testing || false}
+                  onClick={() => setShowTestModelSelector(true)}
                 >
                   {t('Check')}
                 </Button>
               </Tooltip>
             </Flex>
-            {apiKeyAvaliable === true && (
-              <Text span c="chatbox-success">
-                {t('Connection successful!')}
-              </Text>
-            )}
-            {apiKeyAvaliable === false && (
-              <Text span c="chatbox-error">
-                {t('Connection failed!')}
-                <ScrollArea w="100%" className="bg-red-50 dark:bg-red-900/20 px-2">
-                  <pre className="text-xs">{apiKeyCheckingError}</pre>
-                </ScrollArea>
-              </Text>
-            )}
           </Stack>
         )}
 
         {/* API Host */}
         {[
           ModelProviderEnum.OpenAI,
+          ModelProviderEnum.OpenAIResponses,
           ModelProviderEnum.Claude,
           ModelProviderEnum.Gemini,
           ModelProviderEnum.Ollama,
@@ -366,6 +434,16 @@ function ProviderSettings({ providerId }: { providerId: string }) {
                   }).apiHost +
                   normalizeOpenAIApiHostAndPath({
                     apiHost: providerSettings?.apiHost || baseInfo.defaultSettings?.apiHost,
+                  }).apiPath
+                : ''}
+              {baseInfo.id === ModelProviderEnum.OpenAIResponses
+                ? normalizeOpenAIResponsesHostAndPath({
+                    apiHost: providerSettings?.apiHost || baseInfo.defaultSettings?.apiHost,
+                    apiPath: providerSettings?.apiPath || baseInfo.defaultSettings?.apiPath,
+                  }).apiHost +
+                  normalizeOpenAIResponsesHostAndPath({
+                    apiHost: providerSettings?.apiHost || baseInfo.defaultSettings?.apiHost,
+                    apiPath: providerSettings?.apiPath || baseInfo.defaultSettings?.apiPath,
                   }).apiPath
                 : ''}
               {baseInfo.id === ModelProviderEnum.Claude
@@ -408,23 +486,22 @@ function ProviderSettings({ providerId }: { providerId: string }) {
                     </Text>
                   </Flex>
                   <Flex gap="xs" align="center">
-                    <TextInput flex={1} value={providerSettings?.apiPath} onChange={handleApiPathChange} />
+                    <TextInput
+                      flex={1}
+                      value={providerSettings?.apiPath}
+                      onChange={handleApiPathChange}
+                      placeholder={normalizeAPIHost(providerSettings, baseInfo.type).apiPath}
+                    />
                   </Flex>
                 </Stack>
               </Flex>
               <Text span size="xs" flex="0 1 auto" c="chatbox-secondary">
-                {normalizeOpenAIApiHostAndPath({
-                  apiHost: providerSettings?.apiHost,
-                  apiPath: providerSettings?.apiPath,
-                }).apiHost +
-                  normalizeOpenAIApiHostAndPath({
-                    apiHost: providerSettings?.apiHost,
-                    apiPath: providerSettings?.apiPath,
-                  }).apiPath}
+                {normalizeAPIHost(providerSettings, baseInfo.type).apiHost +
+                  normalizeAPIHost(providerSettings, baseInfo.type).apiPath}
               </Text>
               {providerSettings?.apiHost?.includes('aihubmix.com') && (
                 <Flex align="center" gap={4}>
-                  <IconDiscount2 size={14} color="var(--mantine-color-chatbox-tertiary-text)" />
+                  <ScalableIcon icon={IconDiscount2} size={14} color="var(--chatbox-tint-tertiary)" />
                   <Text span size="xs" c="chatbox-tertiary">
                     {t('AIHubMix integration in Chatbox offers 10% discount')}
                   </Text>
@@ -441,7 +518,26 @@ function ProviderSettings({ providerId }: { providerId: string }) {
                 })
               }
             />
+
+            <Stack gap="xs">
+              <Text span fw="600" className=" whitespace-nowrap">
+                {t('Improve Network Compatibility')}
+              </Text>
+            </Stack>
           </>
+        )}
+
+        {/* useProxy for Ollama */}
+        {baseInfo.id === ModelProviderEnum.Ollama && (
+          <Switch
+            label={t('Improve Network Compatibility')}
+            checked={providerSettings?.useProxy || false}
+            onChange={(e) =>
+              setProviderSettings({
+                useProxy: e.currentTarget.checked,
+              })
+            }
+          />
         )}
 
         {baseInfo.id === ModelProviderEnum.Azure && (
@@ -505,7 +601,7 @@ function ProviderSettings({ providerId }: { providerId: string }) {
                 size="compact-xs"
                 px="sm"
                 onClick={handleAddModel}
-                leftSection={<IconPlus size={12} />}
+                leftSection={<ScalableIcon icon={IconPlus} size={12} />}
               >
                 {t('New')}
               </Button>
@@ -517,7 +613,7 @@ function ProviderSettings({ providerId }: { providerId: string }) {
                 size="compact-xs"
                 px="sm"
                 onClick={resetModels}
-                leftSection={<IconRestore size={12} />}
+                leftSection={<ScalableIcon icon={IconRestore} size={12} />}
               >
                 {t('Reset')}
               </Button>
@@ -530,84 +626,188 @@ function ProviderSettings({ providerId }: { providerId: string }) {
                 size="compact-xs"
                 px="sm"
                 onClick={handleFetchModels}
-                leftSection={<IconRefresh size={12} />}
+                leftSection={<ScalableIcon icon={IconRefresh} size={12} />}
               >
                 {t('Fetch')}
               </Button>
             </Flex>
           </Flex>
 
-          <ModelList models={displayModels} showActions={true} onEditModel={editModel} onDeleteModel={deleteModel} />
+          <ModelList
+            models={displayModels}
+            showActions={true}
+            showSearch={false}
+            onEditModel={editModel}
+            onDeleteModel={deleteModel}
+          />
         </Stack>
 
         <Modal
           keepMounted={false}
           opened={!!fetchedModels}
-          onClose={() => setFetchedModels(undefined)}
+          onClose={() => {
+            setFetchedModels(undefined)
+          }}
           title={t('Edit Model')}
           centered={true}
+          classNames={{
+            content: '!max-h-[95vh]',
+          }}
         >
-          <Stack gap="md">
-            {fetchedModels?.map((model) => (
-              <Flex key={model.modelId}>
-                <Text component="span" size="sm" flex="0 1 auto">
+          <ModelList
+            models={fetchedModels || []}
+            showActions={true}
+            showSearch={true}
+            displayedModelIds={displayModels.map((m) => m.modelId)}
+            onAddModel={(model) => setProviderSettings({ models: [...displayModels, model] })}
+            onRemoveModel={(modelId) =>
+              setProviderSettings({ models: displayModels.filter((m) => m.modelId !== modelId) })
+            }
+          />
+        </Modal>
+
+        {/* Test Model Selector Modal */}
+        <Modal
+          opened={showTestModelSelector}
+          onClose={() => setShowTestModelSelector(false)}
+          title={t('Select Test Model')}
+          centered={true}
+          size="md"
+        >
+          <Stack gap="xs">
+            {displayModels.length > 0 ? (
+              displayModels.map((model) => (
+                <Button
+                  key={model.modelId}
+                  variant="light"
+                  fullWidth
+                  onClick={async () => {
+                    setSelectedTestModel(model.modelId)
+                    setShowTestModelSelector(false)
+                    // 执行检查
+                    await handleCheckApiKey(model.modelId)
+                  }}
+                  styles={{
+                    root: {
+                      justifyContent: 'flex-start',
+                    },
+                  }}
+                >
                   {model.nickname || model.modelId}
-                </Text>
-
-                <Flex flex="0 0 auto" gap="xs" align="center">
-                  {model.capabilities?.includes('reasoning') && (
-                    <Tooltip label={t('Reasoning')}>
-                      <IconBulb size={20} className="text-[var(--mantine-color-chatbox-warning-text)]" />
-                    </Tooltip>
-                  )}
-                  {model.capabilities?.includes('vision') && (
-                    <Tooltip label={t('Vision')}>
-                      <IconEye size={20} className="text-[var(--mantine-color-chatbox-brand-text)]" />
-                    </Tooltip>
-                  )}
-                  {model.capabilities?.includes('tool_use') && (
-                    <Tooltip label={t('Tool Use')}>
-                      <IconTool size={20} className="text-[var(--mantine-color-chatbox-success-text)]" />
-                    </Tooltip>
-                  )}
-                </Flex>
-
-                {displayModels?.find((m) => m.modelId === model.modelId) ? (
-                  <Button
-                    variant="transparent"
-                    p={0}
-                    h="auto"
-                    size="xs"
-                    bd={0}
-                    className="ml-auto"
-                    onClick={() =>
-                      setProviderSettings({
-                        models: displayModels.filter((m) => m.modelId !== model.modelId),
-                      })
-                    }
-                  >
-                    <IconCircleMinus size={20} className="text-[var(--mantine-color-chatbox-error-text)]" />
-                  </Button>
-                ) : (
-                  <Button
-                    variant="transparent"
-                    p={0}
-                    h="auto"
-                    size="xs"
-                    bd={0}
-                    className="ml-auto"
-                    onClick={() =>
-                      setProviderSettings({
-                        models: [...displayModels, model],
-                      })
-                    }
-                  >
-                    <IconCirclePlus size={20} className="text-[var(--mantine-color-chatbox-success-text)]" />
-                  </Button>
-                )}
-              </Flex>
-            ))}
+                </Button>
+              ))
+            ) : (
+              <Text c="chatbox-secondary" ta="center" py="md">
+                {t('No models available')}
+              </Text>
+            )}
           </Stack>
+        </Modal>
+
+        {/* Model Test Result Modal */}
+        <Modal
+          opened={!!modelTestResult}
+          onClose={() => setModelTestResult(null)}
+          title={t('Model Test Results')}
+          centered={true}
+          size="md"
+        >
+          {modelTestResult && (
+            <Stack gap="md">
+              <Text size="lg" fw={500}>
+                {modelTestResult.modelName}
+              </Text>
+
+              <Stack gap="sm">
+                {/* Basic Test */}
+                {modelTestResult.basicTest?.status === 'success' ? (
+                  <>
+                    <Text span c="chatbox-success">
+                      {t('Connection successful!')}
+                    </Text>
+                    <Flex
+                      direction="column"
+                      gap="md"
+                      bg="var(--chatbox-background-secondary)"
+                      bd="1px solid var(--chatbox-border-primary)"
+                      p="xs"
+                    >
+                      <Flex align="center" gap="xs">
+                        <Text style={{ minWidth: '120px' }}>{t('Text Request')}:</Text>
+                        <ScalableIcon icon={IconCircleCheck} color="var(--chatbox-tint-success)" />
+                      </Flex>
+                      {/* Vision Test */}
+                      <Flex align="center" gap="xs">
+                        <Text style={{ minWidth: '120px' }}>{t('Vision Request')}:</Text>
+                        {modelTestResult.visionTest?.status === 'success' ? (
+                          <ScalableIcon icon={IconCircleCheck} color="var(--chatbox-tint-success)" />
+                        ) : modelTestResult.visionTest?.status === 'error' ? (
+                          <Flex align="center" gap="xs" maw={400}>
+                            <Tooltip label={modelTestResult.visionTest.error} multiline>
+                              <ScalableIcon icon={IconX} className="cursor-help" color="var(--chatbox-tint-error)" />
+                            </Tooltip>
+                            <Text>{t('This model does not support vision')}</Text>
+                          </Flex>
+                        ) : (
+                          <Flex align="center" gap="xs">
+                            <Loader size="xs" />
+                            <Text c="chatbox-tertiary" size="sm">
+                              {t('Testing...')}
+                            </Text>
+                          </Flex>
+                        )}
+                      </Flex>
+
+                      {/* Tool Use Test */}
+                      <Flex align="center" gap="xs">
+                        <Text style={{ minWidth: '120px' }}>{t('Tool Use Request')}:</Text>
+                        {modelTestResult.toolTest?.status === 'success' ? (
+                          <ScalableIcon icon={IconCircleCheck} color="var(--chatbox-tint-success)" />
+                        ) : modelTestResult.toolTest?.status === 'error' ? (
+                          <Flex align="center" gap="xs" maw={400}>
+                            <Tooltip label={modelTestResult.toolTest.error} multiline>
+                              <ScalableIcon icon={IconX} className="cursor-help" color="var(--chatbox-tint-error)" />
+                            </Tooltip>
+                            <Text>{t('This model does not support tool use')}</Text>
+                          </Flex>
+                        ) : (
+                          <Flex align="center" gap="xs">
+                            <Loader size="xs" />
+                            <Text c="chatbox-tertiary" size="sm">
+                              {t('Testing...')}
+                            </Text>
+                          </Flex>
+                        )}
+                      </Flex>
+                    </Flex>
+                  </>
+                ) : modelTestResult.basicTest?.status === 'error' ? (
+                  <Flex align="center" gap="xs" className="w-full">
+                    <Text span c="chatbox-error" maw="100%">
+                      {t('Connection failed!')}
+                      <div className="bg-red-50 dark:bg-red-900/20 px-2 py-2">
+                        <Text size="xs" c="chatbox-error">
+                          {modelTestResult.basicTest.error}
+                        </Text>
+                      </div>
+                    </Text>
+                  </Flex>
+                ) : (
+                  <Flex align="center" gap="xs">
+                    <Loader size="xs" />
+                    <Text c="chatbox-tertiary" size="sm">
+                      {t('Testing...')}
+                    </Text>
+                  </Flex>
+                )}
+              </Stack>
+            </Stack>
+          )}
+          <Flex justify="flex-end">
+            <Button mt="md" onClick={() => setModelTestResult(null)}>
+              {t('Confirm')}
+            </Button>
+          </Flex>
         </Modal>
       </Stack>
     </Stack>

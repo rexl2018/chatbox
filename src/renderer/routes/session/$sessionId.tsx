@@ -1,32 +1,44 @@
-import NiceModal from '@ebay/nice-modal-react'
-import ArrowCircleDownIcon from '@mui/icons-material/ArrowCircleDown'
-import ArrowCircleUpIcon from '@mui/icons-material/ArrowCircleUp'
-import { Box, ButtonGroup, IconButton } from '@mui/material'
-import { createFileRoute } from '@tanstack/react-router'
-import { useAtomValue, useSetAtom } from 'jotai'
-import { useEffect } from 'react'
-import { createMessage, type ModelProvider } from 'src/shared/types'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
 import Header from '@/components/Header'
-import InputBox from '@/components/InputBox'
-import MessageList from '@/components/MessageList'
+import InputBox from '@/components/InputBox/InputBox'
+import MessageList, { type MessageListRef } from '@/components/MessageList'
 import ThreadHistoryDrawer from '@/components/ThreadHistoryDrawer'
-import * as atoms from '@/stores/atoms'
+import { updateSession as updateSessionStore, useSession } from '@/stores/chatStore'
+import { lastUsedModelStore } from '@/stores/lastUsedModelStore'
 import * as scrollActions from '@/stores/scrollActions'
-import * as sessionActions from '@/stores/sessionActions'
-import { saveSession } from '@/stores/sessionStorageMutations'
+import { modifyMessage, removeCurrentThread, startNewThread, submitNewUserMessage } from '@/stores/sessionActions'
+import { getAllMessageList } from '@/stores/sessionHelpers'
+import NiceModal from '@ebay/nice-modal-react'
+import { Button } from '@mantine/core'
+import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
+import type { Message, ModelProvider } from 'src/shared/types'
+import { useStore } from 'zustand'
 
 export const Route = createFileRoute('/session/$sessionId')({
   component: RouteComponent,
 })
 
 function RouteComponent() {
+  const { t } = useTranslation()
   const { sessionId: currentSessionId } = Route.useParams()
-  const currentSession = useAtomValue(atoms.currentSessionAtom)
-  const setChatSessionSettings = useSetAtom(atoms.chatSessionSettingsAtom)
-  const setPictureSessionSettings = useSetAtom(atoms.pictureSessionSettingsAtom)
-  const lastMessage = currentSession?.messages.length
-    ? currentSession.messages[currentSession.messages.length - 1]
-    : null
+  const navigate = useNavigate()
+  const { session: currentSession, isFetching } = useSession(currentSessionId)
+  const setLastUsedChatModel = useStore(lastUsedModelStore, (state) => state.setChatModel)
+  const setLastUsedPictureModel = useStore(lastUsedModelStore, (state) => state.setPictureModel)
+
+  const currentMessageList = useMemo(() => (currentSession ? getAllMessageList(currentSession) : []), [currentSession])
+  const lastGeneratingMessage = useMemo(
+    () => currentMessageList.find((m: Message) => m.generating),
+    [currentMessageList]
+  )
+
+  const messageListRef = useRef<MessageListRef>(null)
+
+  const goHome = useCallback(() => {
+    navigate({ to: '/', replace: true })
+  }, [navigate])
 
   useEffect(() => {
     setTimeout(() => {
@@ -39,144 +51,135 @@ function RouteComponent() {
     if (currentSession) {
       if (currentSession.type === 'chat' && currentSession.settings) {
         const { provider, modelId } = currentSession.settings
-        setChatSessionSettings({ provider, modelId })
+        if (provider && modelId) {
+          setLastUsedChatModel(provider, modelId)
+        }
       }
       if (currentSession.type === 'picture' && currentSession.settings) {
         const { provider, modelId } = currentSession.settings
-        setPictureSessionSettings({ provider, modelId })
+        if (provider && modelId) {
+          setLastUsedPictureModel(provider, modelId)
+        }
       }
     }
-  }, [
-    currentSession?.settings,
-    currentSession?.type,
-    setChatSessionSettings,
-    setPictureSessionSettings,
-    currentSession,
-  ])
+  }, [currentSession?.settings, currentSession?.type, currentSession, setLastUsedChatModel, setLastUsedPictureModel])
+
+  const onSelectModel = useCallback(
+    (provider: ModelProvider, modelId: string) => {
+      if (!currentSession) {
+        return
+      }
+      void updateSessionStore(currentSession.id, {
+        settings: {
+          ...(currentSession.settings || {}),
+          provider,
+          modelId,
+        },
+      })
+    },
+    [currentSession]
+  )
+
+  const onStartNewThread = useCallback(() => {
+    if (!currentSession) {
+      return false
+    }
+    void startNewThread(currentSession.id)
+    return true
+  }, [currentSession])
+
+  const onRollbackThread = useCallback(() => {
+    if (!currentSession) {
+      return false
+    }
+    void removeCurrentThread(currentSession.id)
+    return true
+  }, [currentSession])
+
+  const onSubmit = useCallback(
+    async ({
+      constructedMessage,
+      needGenerating = true,
+    }: {
+      constructedMessage: Message
+      needGenerating?: boolean
+    }) => {
+      if (!currentSession) {
+        return
+      }
+      messageListRef.current?.scrollToBottom('instant')
+      await submitNewUserMessage(currentSession.id, {
+        newUserMsg: constructedMessage,
+        needGenerating,
+      })
+    },
+    [currentSession]
+  )
+
+  const onClickSessionSettings = useCallback(() => {
+    if (!currentSession) {
+      return false
+    }
+    NiceModal.show('session-settings', {
+      session: currentSession,
+    })
+    return true
+  }, [currentSession])
+
+  const onStopGenerating = useCallback(() => {
+    if (!currentSession) {
+      return false
+    }
+    if (lastGeneratingMessage?.generating) {
+      lastGeneratingMessage?.cancel?.()
+      void modifyMessage(currentSession.id, { ...lastGeneratingMessage, generating: false }, true)
+    }
+    return true
+  }, [currentSession, lastGeneratingMessage])
+
+  const model = useMemo(() => {
+    if (!currentSession?.settings?.modelId || !currentSession?.settings?.provider) {
+      return undefined
+    }
+    return {
+      provider: currentSession.settings.provider,
+      modelId: currentSession.settings.modelId,
+    }
+  }, [currentSession?.settings?.provider, currentSession?.settings?.modelId])
 
   return currentSession ? (
     <div className="flex flex-col h-full">
-      <Header />
+      <Header session={currentSession} />
 
       {/* MessageList 设置 key，确保每个 session 对应新的 MessageList 实例 */}
-      <MessageList key={`message-list${currentSessionId}`} currentSession={currentSession} />
+      <MessageList ref={messageListRef} key={`message-list${currentSessionId}`} currentSession={currentSession} />
 
-      <ScrollButtons />
-      <InputBox
-        key={`input-box${currentSession.id}`}
-        sessionId={currentSession.id}
-        sessionType={currentSession.type}
-        model={
-          currentSession.settings?.provider && currentSession.settings?.modelId
-            ? {
-                provider: currentSession.settings.provider,
-                modelId: currentSession.settings.modelId,
-              }
-            : undefined
-        }
-        onStartNewThread={() => {
-          sessionActions.startNewThread()
-          return true
-        }}
-        onRollbackThread={() => {
-          sessionActions.removeCurrentThread(currentSessionId)
-          return true
-        }}
-        onSelectModel={(provider: ModelProvider, modelId: string) => {
-          if (!currentSession) {
-            return
-          }
-          saveSession({
-            id: currentSession.id,
-            settings: {
-              ...(currentSession.settings || {}),
-              provider,
-              modelId,
-            },
-          })
-        }}
-        onClickSessionSettings={() => {
-          if (!currentSession) {
-            return false
-          }
-          NiceModal.show('session-settings', {
-            session: currentSession,
-          })
-          return true
-        }}
-        generating={lastMessage?.generating}
-        onSubmit={async ({ needGenerating = true, input = '', pictureKeys = [], attachments = [], links = [] }) => {
-          const newMessage = createMessage('user', input)
-          if (pictureKeys?.length) {
-            newMessage.contentParts = newMessage.contentParts ?? []
-            newMessage.contentParts.push(...pictureKeys.map((k) => ({ type: 'image' as const, storageKey: k })))
-          }
-          sessionActions.submitNewUserMessage({
-            currentSessionId: currentSessionId,
-            newUserMsg: newMessage,
-            needGenerating,
-            attachments,
-            links,
-          })
-        }}
-        onStopGenerating={() => {
-          if (!currentSession) {
-            return false
-          }
-          if (lastMessage?.generating) {
-            lastMessage?.cancel?.()
-            sessionActions.modifyMessage(currentSession.id, { ...lastMessage, generating: false }, true)
-          }
-          return true
-        }}
-      />
-      {/* <InputBox /> */}
-      <ThreadHistoryDrawer />
+      {/* <ScrollButtons /> */}
+      <ErrorBoundary name="session-inputbox">
+        <InputBox
+          key={`input-box${currentSession.id}`}
+          sessionId={currentSession.id}
+          sessionType={currentSession.type}
+          model={model}
+          onStartNewThread={onStartNewThread}
+          onRollbackThread={onRollbackThread}
+          onSelectModel={onSelectModel}
+          onClickSessionSettings={onClickSessionSettings}
+          generating={!!lastGeneratingMessage}
+          onSubmit={onSubmit}
+          onStopGenerating={onStopGenerating}
+        />
+      </ErrorBoundary>
+      <ThreadHistoryDrawer session={currentSession} />
     </div>
-  ) : null
-}
-
-function ScrollButtons() {
-  const atScrollTop = useAtomValue(atoms.messageScrollingAtTopAtom)
-  const atScrollBottom = useAtomValue(atoms.messageScrollingAtBottomAtom)
-  const language = useAtomValue(atoms.languageAtom)
-  return (
-    <Box className="relative">
-      <ButtonGroup
-        sx={
-          language === 'ar'
-            ? {
-                position: 'absolute',
-                left: '0.4rem',
-                top: '-5.5rem',
-                opacity: 0.6,
-              }
-            : {
-                position: 'absolute',
-                right: '0.4rem',
-                top: '-5.5rem',
-                opacity: 0.6,
-              }
-        }
-        orientation="vertical"
-      >
-        <IconButton
-          onClick={() => scrollActions.scrollToTop()}
-          sx={{
-            visibility: atScrollTop ? 'hidden' : 'visible',
-          }}
-        >
-          <ArrowCircleUpIcon />
-        </IconButton>
-        <IconButton
-          onClick={() => scrollActions.scrollToBottom()}
-          sx={{
-            visibility: atScrollBottom ? 'hidden' : 'visible',
-          }}
-        >
-          <ArrowCircleDownIcon />
-        </IconButton>
-      </ButtonGroup>
-    </Box>
+  ) : (
+    !isFetching && (
+      <div className="flex flex-1 flex-col items-center justify-center min-h-[60vh]">
+        <div className="text-2xl font-semibold text-gray-700 mb-4">{t('Conversation not found')}</div>
+        <Button variant="outline" onClick={goHome}>
+          {t('Back to HomePage')}
+        </Button>
+      </div>
+    )
   )
 }

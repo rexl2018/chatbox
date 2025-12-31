@@ -1,11 +1,14 @@
-import { countWord } from './word_count'
 import { assign, cloneDeep, omit } from 'lodash'
 import type { Message, MessageContentParts, MessagePicture, SearchResultItem } from '../types'
+import { countWord } from './word_count'
 
-export function getMessageText(message: Message, includeImagePlaceHolder = true): string {
+export function getMessageText(message: Message, includeImagePlaceHolder = true, includeReasoning = false): string {
   if (message.contentParts && message.contentParts.length > 0) {
     return message.contentParts
       .map((c) => {
+        if (c.type === 'reasoning') {
+          return includeReasoning ? c.text : null
+        }
         if (c.type === 'text') {
           return c.text
         }
@@ -75,7 +78,7 @@ export function cloneMessage(message: Message): Message {
 }
 
 export function isEmptyMessage(message: Message): boolean {
-  return getMessageText(message).length === 0
+  return getMessageText(message, true, true).length === 0 && !message.files?.length && !message.links?.length
 }
 
 export function countMessageWords(message: Message): number {
@@ -135,20 +138,20 @@ export function sequenceMessages(msgs: Message[]): Message[] {
     role: 'system',
     contentParts: [],
   }
-  for (let msg of msgs) {
+  for (const msg of msgs) {
     if (msg.role === 'system') {
       system = mergeMessages(system, msg)
     }
   }
   // Initialize the result array with the non-empty system message, if present
-  let ret: Message[] = system.contentParts.length > 0 ? [system] : []
+  const ret: Message[] = !isEmptyMessage(system) ? [system] : []
   let next: Message = {
     id: '',
     role: 'user',
     contentParts: [],
   }
   let isFirstUserMsg = true // Special handling for the first user message
-  for (let msg of msgs) {
+  for (const msg of msgs) {
     // Skip the already processed system messages or empty messages
     if (msg.role === 'system' || isEmptyMessage(msg)) {
       continue
@@ -160,11 +163,14 @@ export function sequenceMessages(msgs: Message[]): Message[] {
     }
     // Merge all assistant messages as a quote block if constructing the first user message
     if (isEmptyMessage(next) && isFirstUserMsg && msg.role === 'assistant') {
-      let quote =
-        getMessageText(msg)
-          .split('\n')
-          .map((line) => `> ${line}`)
-          .join('\n') + '\n'
+      const text = getMessageText(msg)
+      // Split and quote each line, preserving empty lines
+      const lines = text.split('\n')
+      // Remove the last empty element only if text ends with newline
+      const linesToQuote = text.endsWith('\n') ? lines.slice(0, -1) : lines
+      const quotedText = linesToQuote.map((line) => `> ${line}`).join('\n')
+      // Add back the ending newline(s) to match original structure
+      const quote = text.endsWith('\n\n') ? `${quotedText}\n\n` : `${quotedText}\n`
       msg.contentParts = [{ type: 'text', text: quote }]
       next = mergeMessages(next, msg)
       continue

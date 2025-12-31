@@ -1,63 +1,69 @@
-import NiceModal from '@ebay/nice-modal-react'
-import { Box, Grid } from '@mui/material'
-import CssBaseline from '@mui/material/CssBaseline'
-import { ThemeProvider } from '@mui/material/styles'
-import { createRootRoute, Outlet, useLocation, useNavigate } from '@tanstack/react-router'
-import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { useEffect, useMemo, useRef } from 'react'
-import { type RemoteConfig, type Settings, Theme } from '@/../shared/types'
+import { type RemoteConfig, Theme } from '@/../shared/types'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
 import ExitFullscreenButton from '@/components/ExitFullscreenButton'
 import Toasts from '@/components/Toasts'
 import useAppTheme from '@/hooks/useAppTheme'
 import { useSystemLanguageWhenInit } from '@/hooks/useDefaultSystemLanguage'
 import { useI18nEffect } from '@/hooks/useI18nEffect'
-import useScreenChange, { useSidebarWidth } from '@/hooks/useScreenChange'
+import useNeedRoomForWinControls from '@/hooks/useNeedRoomForWinControls'
+import { useSidebarWidth } from '@/hooks/useScreenChange'
 import useShortcut from '@/hooks/useShortcut'
-import { getOS } from '@/packages/navigator'
-import * as remote from '@/packages/remote'
-import CleanWidnow from '@/pages/CleanWindow'
-import PictureDialog from '@/pages/PictureDialog'
-import RemoteDialogWindow from '@/pages/RemoteDialogWindow'
-import SearchDialog from '@/pages/SearchDialog'
-import platform from '@/platform'
-import Sidebar from '@/Sidebar'
-import * as atoms from '@/stores/atoms'
-import * as premiumActions from '@/stores/premiumActions'
-import * as settingActions from '@/stores/settingActions'
 import '@/modals'
+import NiceModal from '@ebay/nice-modal-react'
 import {
   Avatar,
   Button,
   Checkbox,
   Combobox,
+  colorsTuple,
   createTheme,
   type DefaultMantineColor,
+  Drawer,
   Input,
   type MantineColorsTuple,
   MantineProvider,
   Modal,
   NativeSelect,
+  Popover,
   rem,
   Select,
   Switch,
   Text,
   TextInput,
   Title,
+  Tooltip,
   useMantineColorScheme,
   virtualColor,
 } from '@mantine/core'
-import { QueryClientProvider } from '@tanstack/react-query'
-import storage, { StorageKey } from '@/storage'
-import queryClient from '@/stores/queryClient'
+import { Box, Grid } from '@mui/material'
+import CssBaseline from '@mui/material/CssBaseline'
+import { ThemeProvider } from '@mui/material/styles'
+import { createRootRoute, Outlet, useLocation } from '@tanstack/react-router'
+import { useSetAtom } from 'jotai'
+import { useEffect, useMemo, useRef } from 'react'
+import SettingsModal, { navigateToSettings } from '@/modals/Settings'
+import { getOS } from '@/packages/navigator'
+import * as remote from '@/packages/remote'
+import PictureDialog from '@/pages/PictureDialog'
+import RemoteDialogWindow from '@/pages/RemoteDialogWindow'
+import SearchDialog from '@/pages/SearchDialog'
+import platform from '@/platform'
+import { router } from '@/router'
+import Sidebar from '@/Sidebar'
+import * as atoms from '@/stores/atoms'
+import * as premiumActions from '@/stores/premiumActions'
+import * as settingActions from '@/stores/settingActions'
+import { settingsStore, useLanguage, useSettingsStore, useTheme } from '@/stores/settingsStore'
+import { useUIStore } from '@/stores/uiStore'
 
 function Root() {
   const location = useLocation()
-  const navigate = useNavigate()
-  const spellCheck = useAtomValue(atoms.spellCheckAtom)
-  const language = useAtomValue(atoms.languageAtom)
+  const spellCheck = useSettingsStore((state) => state.spellCheck)
+  const language = useLanguage()
   const initialized = useRef(false)
 
-  const setOpenAboutDialog = useSetAtom(atoms.openAboutDialogAtom)
+  const setOpenAboutDialog = useUIStore((s) => s.setOpenAboutDialog)
+
   const setRemoteConfig = useSetAtom(atoms.remoteConfigAtom)
 
   useEffect(() => {
@@ -66,6 +72,7 @@ function Root() {
     }
     // 通过定时器延迟启动，防止处理状态底层存储的异步加载前错误的初始数据
     const tid = setTimeout(() => {
+      // biome-ignore lint/nursery/noFloatingPromises: inline call
       ;(async () => {
         const remoteConfig = await remote
           .getRemoteConfig('setting_chatboxai_first')
@@ -74,33 +81,7 @@ function Root() {
         // 是否需要弹出设置窗口
         initialized.current = true
         if (settingActions.needEditSetting() && location.pathname !== '/settings/mcp') {
-          const res = await NiceModal.show('welcome')
-          if (res) {
-            if (res === 'custom') {
-              const provider: string = await NiceModal.show('provider-selector')
-              // 用户选择Add Custom Provider的话，暂时无法直接拉起添加自定义供应商的弹窗，先跳去默认的供应商配置页
-              if (provider === 'custom') {
-                navigate({
-                  to: '/settings/provider/chatbox-ai',
-                  search: {
-                    custom: true,
-                  },
-                })
-              } else {
-                navigate({
-                  to: '/settings/provider/$providerId',
-                  params: {
-                    providerId: provider,
-                  },
-                })
-              }
-            } else {
-              navigate({
-                to: '/settings/provider/chatbox-ai',
-              })
-            }
-          }
-
+          await NiceModal.show('welcome')
           return
         }
         // 是否需要弹出关于窗口（更新后首次启动）
@@ -114,12 +95,12 @@ function Root() {
     }, 2000)
 
     return () => clearTimeout(tid)
-  }, [navigate, setOpenAboutDialog, setRemoteConfig, location.pathname])
+  }, [setOpenAboutDialog, setRemoteConfig, location.pathname])
 
-  const [showSidebar] = useAtom(atoms.showSidebarAtom)
+  const showSidebar = useUIStore((s) => s.showSidebar)
   const sidebarWidth = useSidebarWidth()
 
-  const _theme = useAtomValue(atoms.themeAtom)
+  const _theme = useTheme()
   const { setColorScheme } = useMantineColorScheme()
   // biome-ignore lint/correctness/useExhaustiveDependencies: setColorScheme is stable
   useEffect(() => {
@@ -132,31 +113,44 @@ function Root() {
     }
   }, [_theme])
 
-  // FIXME: 为了从LocalStroage中初始化这两个atom，否则首次get这两个atom可能得到默认值
-  useAtom(atoms.chatSessionSettingsAtom)
-  useAtom(atoms.pictureSessionSettingsAtom)
-
   useEffect(() => {
-    ;(async () => {
-      const settings = await storage.getItem(StorageKey.Settings, {} as Settings)
+    ;(() => {
+      const { startupPage } = settingsStore.getState()
       const sid = JSON.parse(localStorage.getItem('_currentSessionIdCachedAtom') || '""') as string
-      if (sid && settings?.startupPage === 'session') {
-        navigate({
+      if (sid && startupPage === 'session') {
+        router.navigate({
           to: `/session/${sid}`,
           replace: true,
         })
       }
     })()
-  }, [navigate])
+  }, [])
 
   useEffect(() => {
     if (platform.onNavigate) {
       // 移动端和其他平台的导航监听器
       return platform.onNavigate((path) => {
-        navigate({ to: path })
+        // 如果是 settings 路径，使用 navigateToSettings 以保持与主页面设置按钮一致的行为
+        // 在桌面端会打开 Modal，在移动端会正常导航
+        if (path.startsWith('/settings')) {
+          // 提取 settings 之后的路径部分（包含查询参数）
+          const settingsPath = path.substring('/settings'.length)
+          navigateToSettings(settingsPath || '/')
+        } else {
+          router.navigate({ to: path })
+        }
       })
     }
-  }, [navigate])
+  }, [])
+
+  const { needRoomForMacWindowControls } = useNeedRoomForWinControls()
+  useEffect(() => {
+    if (needRoomForMacWindowControls) {
+      document.documentElement.setAttribute('data-need-room-for-mac-controls', 'true')
+    } else {
+      document.documentElement.removeAttribute('data-need-room-for-mac-controls')
+    }
+  }, [needRoomForMacWindowControls])
 
   return (
     <Box className="box-border App" spellCheck={spellCheck} dir={language === 'ar' ? 'rtl' : 'ltr'}>
@@ -174,7 +168,9 @@ function Root() {
               : {}),
           }}
         >
-          <Outlet />
+          <ErrorBoundary name="main">
+            <Outlet />
+          </ErrorBoundary>
         </Box>
       </Grid>
       {/* 对话设置 */}
@@ -184,7 +180,7 @@ function Root() {
       {/* 对话列表清理 */}
       {/* <ChatConfigWindow /> */}
       {/* 似乎未使用 */}
-      <CleanWidnow />
+      {/* <CleanWidnow /> */}
       {/* 对话列表清理 */}
       {/* <ClearConversationListWindow /> */}
       {/* 导出聊天记录 */}
@@ -204,6 +200,7 @@ function Root() {
       {/* 没有配置模型时的欢迎弹窗 */}
       {/* <WelcomeDialog /> */}
       <Toasts /> {/* mui */}
+      <SettingsModal />
     </Box>
   )
 }
@@ -214,154 +211,15 @@ const creteMantineTheme = (scale = 1) =>
     scale,
     primaryColor: 'chatbox-brand',
     colors: {
-      'chatbox-brand': virtualColor({
-        name: 'chatbox-brand',
-        dark: 'blue',
-        light: 'blue',
-      }),
-      'chatbox-gray': virtualColor({
-        name: 'chatbox-gray',
-        dark: 'gray',
-        light: 'gray',
-      }),
-      'chatbox-success': virtualColor({
-        name: 'chatbox-success',
-        dark: 'teal',
-        light: 'teal',
-      }),
-      'chatbox-error': virtualColor({
-        name: 'chatbox-error',
-        dark: 'red',
-        light: 'red',
-      }),
-      'chatbox-warning': virtualColor({
-        name: 'chatbox-warning',
-        dark: 'yellow',
-        light: 'yellow',
-      }),
+      'chatbox-brand': colorsTuple(Array.from({ length: 10 }, () => 'var(--chatbox-tint-brand)')),
+      'chatbox-gray': colorsTuple(Array.from({ length: 10 }, () => 'var(--chatbox-tint-gray)')),
+      'chatbox-success': colorsTuple(Array.from({ length: 10 }, () => 'var(--chatbox-tint-success)')),
+      'chatbox-error': colorsTuple(Array.from({ length: 10 }, () => 'var(--chatbox-tint-error)')),
+      'chatbox-warning': colorsTuple(Array.from({ length: 10 }, () => 'var(--chatbox-tint-warning)')),
 
-      'chatbox-primary': [
-        'var(--mantine-color-white)',
-        'var(--mantine-color-white)',
-        'var(--mantine-color-white)',
-        'var(--mantine-color-white)',
-        'var(--mantine-color-white)',
-        'var(--mantine-color-gray-9)',
-        'var(--mantine-color-gray-9)',
-        'var(--mantine-color-gray-9)',
-        'var(--mantine-color-gray-9)',
-        'var(--mantine-color-gray-9)',
-      ],
-      'chatbox-secondary': [
-        'var(--mantine-color-gray-4)',
-        'var(--mantine-color-gray-4)',
-        'var(--mantine-color-gray-4)',
-        'var(--mantine-color-gray-4)',
-        'var(--mantine-color-gray-4)',
-        'var(--mantine-color-gray-7)',
-        'var(--mantine-color-gray-7)',
-        'var(--mantine-color-gray-7)',
-        'var(--mantine-color-gray-7)',
-        'var(--mantine-color-gray-7)',
-      ],
-      'chatbox-tertiary': [
-        'var(--mantine-color-dark-2)',
-        'var(--mantine-color-dark-2)',
-        'var(--mantine-color-dark-2)',
-        'var(--mantine-color-dark-2)',
-        'var(--mantine-color-dark-2)',
-        'var(--mantine-color-gray-6)',
-        'var(--mantine-color-gray-6)',
-        'var(--mantine-color-gray-6)',
-        'var(--mantine-color-gray-6)',
-        'var(--mantine-color-gray-6)',
-      ],
-
-      'chatbox-border-primary': [
-        'var(--mantine-color-gray-7)',
-        'var(--mantine-color-gray-7)',
-        'var(--mantine-color-gray-7)',
-        'var(--mantine-color-gray-7)',
-        'var(--mantine-color-gray-7)',
-        'var(--mantine-color-gray-3)',
-        'var(--mantine-color-gray-3)',
-        'var(--mantine-color-gray-3)',
-        'var(--mantine-color-gray-3)',
-        'var(--mantine-color-gray-3)',
-      ],
-      'chatbox-border-secondary': [
-        'var(--mantine-color-gray-6)',
-        'var(--mantine-color-gray-6)',
-        'var(--mantine-color-gray-6)',
-        'var(--mantine-color-gray-6)',
-        'var(--mantine-color-gray-6)',
-        'var(--mantine-color-gray-4)',
-        'var(--mantine-color-gray-4)',
-        'var(--mantine-color-gray-4)',
-        'var(--mantine-color-gray-4)',
-        'var(--mantine-color-gray-4)',
-      ],
-
-      'chatbox-background-primary': [
-        'var(--mantine-color-dark-7)',
-        'var(--mantine-color-dark-7)',
-        'var(--mantine-color-dark-7)',
-        'var(--mantine-color-dark-7)',
-        'var(--mantine-color-dark-7)',
-        'var(--mantine-color-white)',
-        'var(--mantine-color-white)',
-        'var(--mantine-color-white)',
-        'var(--mantine-color-white)',
-        'var(--mantine-color-white)',
-      ],
-      'chatbox-background-secondary': [
-        'var(--mantine-color-dark-5)',
-        'var(--mantine-color-dark-5)',
-        'var(--mantine-color-dark-5)',
-        'var(--mantine-color-dark-5)',
-        'var(--mantine-color-dark-5)',
-        'var(--mantine-color-gray-1)',
-        'var(--mantine-color-gray-1)',
-        'var(--mantine-color-gray-1)',
-        'var(--mantine-color-gray-1)',
-        'var(--mantine-color-gray-1)',
-      ],
-      'chatbox-background-tertiary': [
-        'var(--mantine-color-dark-4)',
-        'var(--mantine-color-dark-4)',
-        'var(--mantine-color-dark-4)',
-        'var(--mantine-color-dark-4)',
-        'var(--mantine-color-dark-4)',
-        'var(--mantine-color-gray-3)',
-        'var(--mantine-color-gray-3)',
-        'var(--mantine-color-gray-3)',
-        'var(--mantine-color-gray-3)',
-        'var(--mantine-color-gray-3)',
-      ],
-      'chatbox-background-disabled': [
-        'var(--mantine-color-dark-6)',
-        'var(--mantine-color-dark-6)',
-        'var(--mantine-color-dark-6)',
-        'var(--mantine-color-dark-6)',
-        'var(--mantine-color-dark-6)',
-        'var(--mantine-color-gray-2)',
-        'var(--mantine-color-gray-2)',
-        'var(--mantine-color-gray-2)',
-        'var(--mantine-color-gray-2)',
-        'var(--mantine-color-gray-2)',
-      ],
-      'chatbox-background-error-secondary': [
-        'var(--mantine-color-red-9)',
-        'var(--mantine-color-red-9)',
-        'var(--mantine-color-red-9)',
-        'var(--mantine-color-red-9)',
-        'var(--mantine-color-red-9)',
-        'var(--mantine-color-red-1)',
-        'var(--mantine-color-red-1)',
-        'var(--mantine-color-red-1)',
-        'var(--mantine-color-red-1)',
-        'var(--mantine-color-red-1)',
-      ],
+      'chatbox-primary': colorsTuple(Array.from({ length: 10 }, () => 'var(--chatbox-tint-primary)')),
+      'chatbox-secondary': colorsTuple(Array.from({ length: 10 }, () => 'var(--chatbox-tint-secondary)')),
+      'chatbox-tertiary': colorsTuple(Array.from({ length: 10 }, () => 'var(--chatbox-tint-tertiary)')),
     },
     headings: {
       fontWeight: 'Bold',
@@ -451,13 +309,13 @@ const creteMantineTheme = (scale = 1) =>
         }),
       }),
       Input: Input.extend({
-        styles: (_, props) => ({
+        styles: (_theme, props) => ({
           wrapper: {
             '--input-height-sm': rem('32px'),
             ...(props.error
               ? {
-                  '--input-color': 'var(--mantine-color-chatbox-error-text)',
-                  '--input-bd': 'var(--mantine-color-chatbox-error-text)',
+                  '--input-color': 'var(--chatbox-tint-error)',
+                  '--input-bd': 'var(--chatbox-tint-error)',
                 }
               : {}),
           },
@@ -516,12 +374,10 @@ const creteMantineTheme = (scale = 1) =>
         defaultProps: {
           size: 'sm',
         },
-        styles: (_, props) => {
+        styles: (_theme, props) => {
           return {
             label: {
-              color: props.checked
-                ? 'var(--mantine-color-chatbox-primary-text)'
-                : 'var(--mantine-color-chatbox-tertiary-text)',
+              color: props.checked ? 'var(--chatbox-tint-primary)' : 'var(--chatbox-tint-tertiary)',
             },
           }
         },
@@ -530,11 +386,9 @@ const creteMantineTheme = (scale = 1) =>
         defaultProps: {
           size: 'sm',
         },
-        styles: (_, props) => ({
+        styles: (_theme, props) => ({
           label: {
-            color: props.checked
-              ? 'var(--mantine-color-chatbox-primary-text)'
-              : 'var(--mantine-color-chatbox-tertiary-text)',
+            color: props.checked ? 'var(--chatbox-tint-primary)' : 'var(--chatbox-tint-tertiary)',
           },
         }),
       }),
@@ -545,19 +399,49 @@ const creteMantineTheme = (scale = 1) =>
         styles: () => ({
           title: {
             fontWeight: '600',
-            color: 'var(--mantine-color-chatbox-primary-text)',
+            color: 'var(--chatbox-tint-primary)',
             fontSize: 'var(--mantine-font-size-sm)',
           },
           close: {
             width: rem('24px'),
             height: rem('24px'),
-            color: 'var(--mantine-color-chatbox-secondary-text)',
+            color: 'var(--chatbox-tint-secondary)',
+          },
+          content: {
+            backgroundColor: 'var(--chatbox-background-primary)',
+          },
+          overlay: {
+            '--overlay-bg': 'var(--chatbox-background-mask-overlay)',
+          },
+        }),
+      }),
+      Drawer: Drawer.extend({
+        defaultProps: {
+          zIndex: 2000,
+        },
+        styles: () => ({
+          title: {
+            fontWeight: '600',
+            color: 'var(--chatbox-tint-primary)',
+            fontSize: 'var(--mantine-font-size-sm)',
+          },
+          close: {
+            width: rem('24px'),
+            height: rem('24px'),
+            color: 'var(--chatbox-tint-secondary)',
+          },
+          content: {
+            backgroundColor: 'var(--chatbox-background-primary)',
+          },
+          overlay: {
+            '--overlay-bg': 'var(--chatbox-background-mask-overlay)',
           },
         }),
       }),
       Combobox: Combobox.extend({
         defaultProps: {
           shadow: 'md',
+          zIndex: 2100,
         },
       }),
       Avatar: Avatar.extend({
@@ -566,6 +450,16 @@ const creteMantineTheme = (scale = 1) =>
             objectFit: 'contain',
           },
         }),
+      }),
+      Tooltip: Tooltip.extend({
+        defaultProps: {
+          zIndex: 3000,
+        },
+      }),
+      Popover: Popover.extend({
+        defaultProps: {
+          zIndex: 3000,
+        },
       }),
     },
   })
@@ -576,27 +470,26 @@ export const Route = createRootRoute({
     premiumActions.useAutoValidate() // 每次启动都执行 license 检查，防止用户在lemonsqueezy管理页面中取消了当前设备的激活
     useSystemLanguageWhenInit()
     useShortcut()
-    useScreenChange()
     const theme = useAppTheme()
-    const _theme = useAtomValue(atoms.themeAtom)
-    const settings = useAtomValue(atoms.settingsAtom)
-    const scale = settings.fontSize / 14
+    const _theme = useTheme()
+    const fontSize = useSettingsStore((state) => state.fontSize)
+    const scale = fontSize / 14
     const mantineTheme = useMemo(() => creteMantineTheme(scale), [scale])
 
     return (
-      <QueryClientProvider client={queryClient}>
-        <MantineProvider
-          theme={mantineTheme}
-          defaultColorScheme={_theme === Theme.Dark ? 'dark' : _theme === Theme.Light ? 'light' : 'auto'}
-        >
-          <ThemeProvider theme={theme}>
-            <CssBaseline />
-            <NiceModal.Provider>
+      <MantineProvider
+        theme={mantineTheme}
+        defaultColorScheme={_theme === Theme.Dark ? 'dark' : _theme === Theme.Light ? 'light' : 'auto'}
+      >
+        <ThemeProvider theme={theme}>
+          <CssBaseline />
+          <NiceModal.Provider>
+            <ErrorBoundary>
               <Root />
-            </NiceModal.Provider>
-          </ThemeProvider>
-        </MantineProvider>
-      </QueryClientProvider>
+            </ErrorBoundary>
+          </NiceModal.Provider>
+        </ThemeProvider>
+      </MantineProvider>
     )
   },
 })
@@ -610,9 +503,6 @@ type ExtendedCustomColors =
   | 'chatbox-primary'
   | 'chatbox-secondary'
   | 'chatbox-tertiary'
-  | 'chatbox-border-primary'
-  | 'chatbox-border-secondary'
-  | 'chatbox-background-error-secondary'
   | DefaultMantineColor
 
 declare module '@mantine/core' {

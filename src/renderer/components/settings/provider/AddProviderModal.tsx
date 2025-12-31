@@ -1,10 +1,11 @@
-import { Button, Flex, Modal, Select, Stack, Text, TextInput } from '@mantine/core'
+import { Button, Flex, Select, Stack, Text, TextInput } from '@mantine/core'
 import { useNavigate } from '@tanstack/react-router'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ModelProviderType } from 'src/shared/types'
 import { v4 as uuidv4 } from 'uuid'
-import { useSettings } from '@/hooks/useSettings'
+import { Modal } from '@/components/Overlay'
+import { useSettingsStore } from '@/stores/settingsStore'
 
 interface AddProviderModalProps {
   opened: boolean
@@ -14,19 +15,20 @@ interface AddProviderModalProps {
 export function AddProviderModal({ opened, onClose }: AddProviderModalProps) {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const { settings, setSettings } = useSettings()
+  const setSettings = useSettingsStore((s) => s.setSettings)
+  const customProviders = useSettingsStore((s) => s.customProviders)
   const [newProviderName, setNewProviderName] = useState('')
-  const [newProviderMode] = useState(ModelProviderType.OpenAI)
+  const [newProviderMode, setNewProviderMode] = useState<ModelProviderType>(ModelProviderType.OpenAI)
 
   const handleAddProvider = () => {
     const pid = `custom-provider-${uuidv4()}`
     setSettings({
       customProviders: [
-        ...(settings.customProviders || []),
+        ...(customProviders || []),
         {
           id: pid,
           name: newProviderName,
-          type: ModelProviderType.OpenAI,
+          type: newProviderMode,
           isCustom: true,
         },
       ],
@@ -53,10 +55,23 @@ export function AddProviderModal({ opened, onClose }: AddProviderModalProps) {
         <Text>{t('API Mode')}</Text>
         <Select
           value={newProviderMode}
+          onChange={(value) => setNewProviderMode(value as ModelProviderType)}
           data={[
             {
               value: ModelProviderType.OpenAI,
               label: t('OpenAI API Compatible'),
+            },
+            {
+              value: ModelProviderType.OpenAIResponses,
+              label: t('OpenAI Responses API Compatible'),
+            },
+            {
+              value: ModelProviderType.Claude,
+              label: t('Claude API Compatible'),
+            },
+            {
+              value: ModelProviderType.Gemini,
+              label: t('Google Gemini API Compatible'),
             },
           ]}
         />

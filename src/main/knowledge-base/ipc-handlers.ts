@@ -180,7 +180,7 @@ export function registerKnowledgeBaseHandlers() {
         log.info(`[IPC] Deleted knowledge base record for kbId=${kbId}`)
 
         // 3. Delete vector index
-        await vectorStore.deleteIndex(`kb_${kbId}`)
+        await vectorStore.deleteIndex({ indexName: `kb_${kbId}` })
         log.info(`[IPC] Deleted vector index for kbId=${kbId}`)
       })
 

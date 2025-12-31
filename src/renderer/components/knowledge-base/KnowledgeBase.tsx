@@ -1,4 +1,4 @@
-import { Alert, Button, Flex, Group, Modal, Paper, Pill, Stack, Text, Title } from '@mantine/core'
+import { Alert, Button, Flex, Group, Paper, Pill, Stack, Text, Title } from '@mantine/core'
 import { IconAlertTriangle, IconInfoCircle, IconPlus } from '@tabler/icons-react'
 import compact from 'lodash/compact'
 import flatten from 'lodash/flatten'
@@ -8,10 +8,14 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { SystemProviders } from 'src/shared/defaults'
 import type { KnowledgeBase, ModelProvider, ProviderModelInfo } from 'src/shared/types'
+import { parseKnowledgeBaseModelString } from 'src/shared/utils/knowledge-base-model-parser'
 import { useProviders } from '@/hooks/useProviders'
-import { useSettings } from '@/hooks/useSettings'
 import * as remote from '@/packages/remote'
 import platform from '@/platform'
+import { useSettingsStore } from '@/stores/settingsStore'
+import { trackEvent } from '@/utils/track'
+import { Modal } from '../Overlay'
+import { ScalableIcon } from '../ScalableIcon'
 import KnowledgeBaseDocuments from './KnowledgeBaseDocuments'
 import {
   KnowledgeBaseChatboxAIInfo,
@@ -44,7 +48,7 @@ const ModelPill: React.FC<ModelPillProps> = ({ modelValue, formatModelName, isPr
 
   const getIcon = () => {
     if (!hasModel || isProviderAvailable(modelValue)) return null
-    return <IconAlertTriangle size={12} color="red" title={t('Provider unavailable')} />
+    return <ScalableIcon icon={IconAlertTriangle} size={12} color="red" title={t('Provider unavailable')} />
   }
 
   const maxWidth = isEmbedding ? 200 : 150
@@ -81,7 +85,8 @@ const KnowledgeBasePage: React.FC = () => {
   const [kbList, setKbList] = useState<KnowledgeBase[]>([])
   const [newKbName, setNewKbName] = useState('')
   const [showCreate, setShowCreate] = useState(false)
-  const { settings } = useSettings()
+  const licenseKey = useSettingsStore((state) => state.licenseKey)
+  const customProviders = useSettingsStore((state) => state.customProviders)
 
   const [newEmbeddingModel, setNewEmbeddingModel] = useState<string | null>(null)
   const [newRerankModel, setNewRerankModel] = useState<string | null>(null)
@@ -99,8 +104,8 @@ const KnowledgeBasePage: React.FC = () => {
   } | null>(null)
 
   const canUseChatboxAIProvider = useMemo(() => {
-    return !!(chatboxAIModels && settings.licenseKey)
-  }, [chatboxAIModels, settings.licenseKey])
+    return !!(chatboxAIModels && licenseKey)
+  }, [chatboxAIModels, licenseKey])
 
   const [newProviderMode, setNewProviderMode] = useState<'chatbox-ai' | 'custom'>('custom')
 
@@ -154,14 +159,14 @@ const KnowledgeBasePage: React.FC = () => {
         return SystemProviders.find((it) => it.id === providerId)?.name
       }
 
-      const customProvider = settings.customProviders?.find((it) => it.id === providerId)
+      const customProvider = customProviders?.find((it) => it.id === providerId)
       if (customProvider) {
         return customProvider.name
       }
 
       return providerId
     },
-    [settings.customProviders]
+    [customProviders]
   )
 
   const getModelName = useCallback(
@@ -179,16 +184,17 @@ const KnowledgeBasePage: React.FC = () => {
 
   const isProviderAvailable = useCallback(
     (modelString: string) => {
-      if (!modelString) return false
-      const [providerId] = modelString.split(':')
-      return providers.some((provider) => provider.id === providerId)
+      const parsed = parseKnowledgeBaseModelString(modelString)
+      if (!parsed) return false
+      return providers.some((provider) => provider.id === parsed.providerId)
     },
     [providers]
   )
 
   function formatModelName(model: string) {
-    if (!model) return t('Unknown')
-    const [providerId, modelId] = model.split(':')
+    const parsed = parseKnowledgeBaseModelString(model)
+    if (!parsed) return t('Unknown')
+    const { providerId, modelId } = parsed
     const providerName = getProviderName(providerId)
     const modelName = getModelName(providerId, modelId) || modelId
     return `${providerName} | ${modelName}`
@@ -267,6 +273,14 @@ const KnowledgeBasePage: React.FC = () => {
         visionModel: visionModel,
       })
 
+      trackEvent('knowledge_base_created', {
+        provider_mode: newProviderMode,
+        embedding_model: embeddingModel,
+        rerank_model: rerankModel || null,
+        vision_model: visionModel || null,
+        knowledge_base_name: newKbName,
+      })
+
       // Reset form
       setNewKbName('')
       setNewProviderMode('chatbox-ai')
@@ -323,7 +337,7 @@ const KnowledgeBasePage: React.FC = () => {
         <Title order={5}>{t('Knowledge Base')}</Title>
         <Button variant="outline" onClick={() => setShowCreate(true)} disabled={isUnsupportedPlatform}>
           <Group gap="xs">
-            <IconPlus size={16} />
+            <ScalableIcon icon={IconPlus} size={16} />
             <Text size="sm" c="chatbox-brand" fw={400}>
               {t('Add')}
             </Text>
@@ -332,7 +346,12 @@ const KnowledgeBasePage: React.FC = () => {
       </Group>
 
       {isUnsupportedPlatform && (
-        <Alert variant="light" color="orange" title={t('Platform Not Supported')} icon={<IconInfoCircle size={16} />}>
+        <Alert
+          variant="light"
+          color="orange"
+          title={t('Platform Not Supported')}
+          icon={<ScalableIcon icon={IconInfoCircle} size={16} />}
+        >
           <Text size="sm">
             {t(
               'Knowledge Base functionality is not available on Windows ARM64 due to library compatibility issues. This feature is supported on Windows x64, macOS, and Linux.'
@@ -438,7 +457,7 @@ const KnowledgeBasePage: React.FC = () => {
           {kbList.length === 0 ? (
             <Paper withBorder p="xl" style={{ textAlign: 'center' }}>
               <Stack gap="md" align="center">
-                <IconInfoCircle size={48} color="var(--mantine-color-dimmed)" />
+                <ScalableIcon icon={IconInfoCircle} size={48} color="var(--chatbox-tint-tertiary)" />
                 <Stack gap="xs" align="center">
                   <Text fw={500} size="lg">
                     {t('No Knowledge Base Yet')}
@@ -451,7 +470,7 @@ const KnowledgeBasePage: React.FC = () => {
                 </Stack>
                 <Button variant="outline" onClick={() => setShowCreate(true)} size="sm">
                   <Group gap="xs">
-                    <IconPlus size={16} />
+                    <ScalableIcon icon={IconPlus} size={16} />
                     {t('Create First Knowledge Base')}
                   </Group>
                 </Button>

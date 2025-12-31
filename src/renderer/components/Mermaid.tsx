@@ -1,15 +1,16 @@
-import { useSetAtom } from 'jotai'
-import mermaid from 'mermaid'
-import { useEffect, useState, useMemo } from 'react'
-import * as atoms from '@/stores/atoms'
-import { ChartBarStacked } from 'lucide-react'
-import { Img } from './Image'
-import { copyToClipboard } from '@/packages/navigator'
-import { cn } from '@/lib/utils'
+/** biome-ignore-all lint/security/noDangerouslySetInnerHtml: <explanation> */
 import DataObjectIcon from '@mui/icons-material/DataObject'
-import * as toastActions from '../stores/toastActions'
+import { ChartBarStacked } from 'lucide-react'
+import mermaid from 'mermaid'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Gallery, Item } from 'react-photoswipe-gallery'
+import { cn } from '@/lib/utils'
+import { copyToClipboard } from '@/packages/navigator'
 import * as picUtils from '@/packages/pic_utils'
+import platform from '@/platform'
+import { useUIStore } from '@/stores/uiStore'
+import * as toastActions from '../stores/toastActions'
 
 export function MessageMermaid(props: { source: string; theme: 'light' | 'dark'; generating?: boolean }) {
   const { source, theme, generating } = props
@@ -62,7 +63,7 @@ export function MermaidSVGPreviewDangerous(props: {
 }) {
   const { svgId, svgCode, mermaidCode, className, generating } = props
   const { t } = useTranslation()
-  const setPictureShow = useSetAtom(atoms.pictureShowAtom)
+  const setPictureShow = useUIStore((s) => s.setPictureShow)
   if (!svgCode.includes('</svg') && generating) {
     return <Loading />
   }
@@ -101,7 +102,6 @@ export function MermaidSVGPreviewDangerous(props: {
 
 export function SVGPreview(props: { xmlCode: string; className?: string; generating?: boolean }) {
   let { xmlCode, className, generating } = props
-  const setPictureShow = useSetAtom(atoms.pictureShowAtom)
   const svgBase64 = useMemo(() => {
     if (!xmlCode.includes('</svg') && generating) {
       return ''
@@ -117,22 +117,71 @@ export function SVGPreview(props: { xmlCode: string; className?: string; generat
       return ''
     }
   }, [xmlCode, generating])
+
+  const size = useMemo(() => {
+    const parser = new DOMParser()
+    const doc = parser.parseFromString(xmlCode, 'image/svg+xml')
+    const svgEl = doc.documentElement
+
+    let width = parseInt(svgEl.getAttribute('width') || '') || 0
+    let height = parseInt(svgEl.getAttribute('height') || '') || 0
+    const viewBox = svgEl.getAttribute('viewBox')
+    if ((!width || !height) && viewBox) {
+      const vb = viewBox.trim().split(/\s+/).map(Number)
+      if (vb.length === 4 && Number.isFinite(vb[2]) && Number.isFinite(vb[3])) {
+        width = width || Math.max(1, Math.round(vb[2]))
+        height = height || Math.max(1, Math.round(vb[3]))
+      }
+    }
+    return { width, height }
+  }, [xmlCode])
+
   if (!svgBase64) {
     return <Loading />
   }
+
   return (
-    <div
-      className={cn('cursor-pointer my-2', className)}
-      onClick={async () => {
-        // 图片预览窗口中直接显示 png 图片。因为在实际测试中发现，桌面端无法正常显示 SVG 图片，但网页端可以。
-        const pngBase64 = await picUtils.svgToPngBase64(svgBase64)
-        setPictureShow({
-          picture: { url: pngBase64 },
-        })
-      }}
+    <Gallery
+      uiElements={[
+        {
+          name: 'custom-rotate-button',
+          ariaLabel: 'Rotate',
+          order: 9,
+          isButton: true,
+          html: {
+            isCustomSVG: true,
+            inner:
+              '<path d="M20.5 14.3 17.1 18V10h-2.2v7.9l-3.4-3.6L10 16l6 6.1 6-6.1ZM23 23H9v2h14Z" id="pswp__icn-download"/>',
+            outlineID: 'pswp__icn-download',
+          },
+          appendTo: 'bar',
+          onClick: async () => {
+            if (platform.type === 'mobile') {
+              const pngBase64 = await picUtils.svgToPngBase64(svgBase64)
+              platform.exporter.exportImageFile(`svg_${Math.random().toString(36).substring(7)}`, pngBase64)
+            } else {
+              platform.exporter.exportByUrl(`svg_${Math.random().toString(36).substring(7)}`, svgBase64)
+            }
+          },
+        },
+      ]}
     >
-      <Img src={svgBase64} />
-    </div>
+      <div className={cn('cursor-pointer my-2', className)}>
+        <Item original={svgBase64} thumbnail={svgBase64} width={size.width} height={size.height}>
+          {({ ref, open }) => (
+            <img
+              className="!w-auto min-w-24"
+              ref={ref}
+              src={svgBase64}
+              alt="svg preview"
+              width={size.width}
+              // height={size.height}
+              onClick={open}
+            />
+          )}
+        </Item>
+      </div>
+    </Gallery>
   )
 }
 

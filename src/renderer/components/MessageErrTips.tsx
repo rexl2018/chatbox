@@ -1,22 +1,18 @@
 import { Link } from '@mui/material'
 import Alert from '@mui/material/Alert'
-import { useNavigate } from '@tanstack/react-router'
-import { useSetAtom } from 'jotai'
 import type React from 'react'
 import { Trans } from 'react-i18next'
+import { navigateToSettings } from '@/modals/Settings'
 import { trackingEvent } from '@/packages/event'
 import platform from '@/platform'
 import { aiProviderNameHash } from '../../shared/models'
 import { ChatboxAIAPIError } from '../../shared/models/errors'
 import type { Message } from '../../shared/types'
-import * as atoms from '../stores/atoms'
 import * as settingActions from '../stores/settingActions'
 import LinkTargetBlank from './Link'
 
 export default function MessageErrTips(props: { msg: Message }) {
   const { msg } = props
-  const navigate = useNavigate()
-  const setOpenSettingDialogAtom = useSetAtom(atoms.openSettingDialogAtom)
   if (!msg.error) {
     return null
   }
@@ -45,17 +41,7 @@ export default function MessageErrTips(props: { msg: Message }) {
             <a
               className="cursor-pointer underline font-bold hover:text-blue-600 transition-colors"
               onClick={() => {
-                setOpenSettingDialogAtom('ai')
-                navigate(
-                  msg.aiProvider
-                    ? {
-                        to: '/settings/provider/$providerId',
-                        params: { providerId: msg.aiProvider },
-                      }
-                    : {
-                        to: '/settings/provider',
-                      }
-                )
+                navigateToSettings(msg.aiProvider ? `/provider/${msg.aiProvider}` : '/provider')
               }}
             />
           ),
@@ -91,13 +77,10 @@ export default function MessageErrTips(props: { msg: Message }) {
         }}
         components={[
           <Link
-            key="0"
+            key="link"
             className="cursor-pointer font-bold"
             onClick={() => {
-              setOpenSettingDialogAtom('ai')
-              navigate({
-                to: '/settings',
-              })
+              navigateToSettings()
             }}
           ></Link>,
         ]}
@@ -119,10 +102,7 @@ export default function MessageErrTips(props: { msg: Message }) {
               <Link
                 className="cursor-pointer italic"
                 onClick={() => {
-                  setOpenSettingDialogAtom('ai')
-                  navigate({
-                    to: '/settings',
-                  })
+                  navigateToSettings()
                 }}
               ></Link>
             ),
@@ -130,10 +110,7 @@ export default function MessageErrTips(props: { msg: Message }) {
               <Link
                 className="cursor-pointer italic"
                 onClick={() => {
-                  setOpenSettingDialogAtom('extension')
-                  navigate({
-                    to: '/settings',
-                  })
+                  navigateToSettings('/web-search')
                 }}
               ></Link>
             ),
@@ -165,7 +142,7 @@ export default function MessageErrTips(props: { msg: Message }) {
         i18nKey="unknown error tips"
         components={[
           <a
-            key="0"
+            key="a"
             href={`https://chatboxai.app/redirect_app/faqs/${settingActions.getLanguage()}`}
             target="_blank"
           ></a>,

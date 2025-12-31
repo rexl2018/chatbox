@@ -1,4 +1,4 @@
-import type { CoreMessage, FilePart, ImagePart, TextPart } from 'ai'
+import type { FilePart, ImagePart, ModelMessage, TextPart } from 'ai'
 import dayjs from 'dayjs'
 import { compact } from 'lodash'
 import type { Message, MessageContentParts } from 'src/shared/types'
@@ -16,7 +16,7 @@ async function convertContentParts<T extends TextPart | ImagePart | FilePart>(
     await Promise.all(
       contentParts.map(async (c) => {
         if (c.type === 'text') {
-          return { type: 'text', text: c.text! } as T
+          return { type: 'text', text: c.text } as T
         } else if (c.type === 'image') {
           if (options?.modelSupportVision === false) {
             return { type: 'text', text: `This is an image, OCR Result: \n${c.ocrResult}` } as T
@@ -28,13 +28,21 @@ async function convertContentParts<T extends TextPart | ImagePart | FilePart>(
               return null
             }
             const base64Data = imageData.replace(/^data:image\/[^;]+;base64,/, '')
-            const mimeType = imageData.match(/^data:([^;]+)/)?.[1] || 'image/png'
+            const mediaType = imageData.match(/^data:([^;]+)/)?.[1] || 'image/png'
 
-            return {
-              type: imageType,
-              ...(imageType === 'image' ? { image: base64Data } : { data: base64Data }),
-              mimeType,
-            } as T
+            if (imageType === 'image') {
+              return {
+                type: 'image',
+                image: base64Data,
+                mediaType,
+              } as T
+            } else {
+              return {
+                type: 'file',
+                data: base64Data,
+                mediaType,
+              } as T
+            }
           } catch (error) {
             console.error(`Failed to get image for storage key ${c.storageKey}:`, error)
             return null
@@ -51,23 +59,23 @@ async function convertUserContentParts(
   dependencies: ModelDependencies,
   options?: { modelSupportVision: boolean }
 ): Promise<Array<TextPart | ImagePart>> {
-  return convertContentParts<TextPart | ImagePart>(contentParts, 'image', dependencies, options)
+  return await convertContentParts<TextPart | ImagePart>(contentParts, 'image', dependencies, options)
 }
 
 async function convertAssistantContentParts(
   contentParts: MessageContentParts,
   dependencies: ModelDependencies
 ): Promise<Array<TextPart | FilePart>> {
-  return convertContentParts<TextPart | FilePart>(contentParts, 'file', dependencies)
+  return await convertContentParts<TextPart | FilePart>(contentParts, 'file', dependencies)
 }
 
-export async function convertToCoreMessages(
+export async function convertToModelMessages(
   messages: Message[],
   options?: { modelSupportVision: boolean }
-): Promise<CoreMessage[]> {
+): Promise<ModelMessage[]> {
   const dependencies = await createModelDependencies()
   const results = await Promise.all(
-    messages.map(async (m): Promise<CoreMessage | null> => {
+    messages.map(async (m): Promise<ModelMessage | null> => {
       switch (m.role) {
         case 'system':
           return {
@@ -99,7 +107,7 @@ export async function convertToCoreMessages(
   )
   
   // Filter out null values manually instead of using compact
-  return results.filter((result): result is CoreMessage => result !== null)
+  return results.filter((result): result is ModelMessage => result !== null)
 }
 
 /**

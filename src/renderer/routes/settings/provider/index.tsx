@@ -6,7 +6,7 @@ export const Route = createFileRoute('/settings/provider/')({
   component: RouteComponent,
 })
 
-function RouteComponent() {
+export function RouteComponent() {
   const isSmallScreen = useIsSmallScreen()
   const navigate = useNavigate()
   useEffect(() => {

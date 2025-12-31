@@ -1,24 +1,28 @@
-import { useEffect, useRef, useState } from 'react'
 import { Dialog, DialogContent, useTheme } from '@mui/material'
+import { useAtomValue } from 'jotai'
+import { Loader2, ScanSearch } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import * as sessionAction from '../stores/sessionActions'
-import * as scrollActions from '../stores/scrollActions'
-import { ScanSearch, Loader2 } from 'lucide-react'
-import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
-import { Message as MessageType, Session, SessionMeta } from 'src/shared/types'
-import { cn } from '@/lib/utils'
-import { useAtom, useAtomValue } from 'jotai'
-import * as atoms from '@/stores/atoms'
-import { useIsSmallScreen } from '@/hooks/useScreenChange'
-import Message from '@/components/Message'
+import type { Session } from 'src/shared/types'
 import Mark from '@/components/Mark'
-import { getMessageText } from '@/utils/message'
-import { searchSessions } from '@/stores/sessionStorageMutations'
-interface Props {}
+import { BlockCodeCollapsedStateProvider } from '@/components/Markdown'
+import Message from '@/components/Message'
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
+import { useIsSmallScreen } from '@/hooks/useScreenChange'
+import { cn } from '@/lib/utils'
+import { currentSessionIdAtom } from '@/stores/atoms'
+import { useSession } from '@/stores/chatStore'
+import { searchSessions } from '@/stores/sessionHelpers'
+import { useUIStore } from '@/stores/uiStore'
+import * as scrollActions from '../stores/scrollActions'
+import { switchCurrentSession } from '../stores/sessionActions'
+
+type Props = {}
 
 export default function SearchDialog(props: Props) {
   const isSmallScreen = useIsSmallScreen()
-  const [open, setOpen] = useAtom(atoms.openSearchDialogAtom)
+  const open = useUIStore((s) => s.openSearchDialog)
+  const setOpen = useUIStore((s) => s.setOpenSearchDialog)
   const [mode, setMode] = useState<'command' | 'search-result'>('command')
   const [loading, setLoading] = useState<boolean>(false)
   const [searchInput, _setSearchInput] = useState('')
@@ -27,7 +31,8 @@ export default function SearchDialog(props: Props) {
   const theme = useTheme()
   const { t } = useTranslation()
   const ref = useRef<HTMLInputElement>(null)
-  const currentSession = useAtomValue(atoms.currentSessionAtom)
+
+  const currentSessionId = useAtomValue(currentSessionIdAtom)
 
   useEffect(() => {
     if (open) {
@@ -46,11 +51,11 @@ export default function SearchDialog(props: Props) {
     setMode('search-result')
     setSearchResult([])
     setLoading(true)
-    if (!currentSession) {
+    if (!currentSessionId) {
       setLoading(false)
       return
     }
-    searchSessions(searchInput, flag === 'current-session' ? currentSession.id : undefined, (batches) => {
+    searchSessions(searchInput, flag === 'current-session' ? currentSessionId : undefined, (batches) => {
       setSearchResult((prev) => [...prev, ...batches])
     })
     setSearchResultMarks([searchInput])
@@ -141,56 +146,59 @@ export default function SearchDialog(props: Props) {
             </div>
           )}
           {mode === 'search-result' && !loading && (
-            <Mark marks={[searchInput]}>
-              <CommandList>
-                <CommandEmpty>{t('No results found')}</CommandEmpty>
-                {searchResult.map((result, i) => (
-                  <CommandGroup
-                    key={i}
-                    heading={`${t('chat')} "${result.name}":`}
-                    className={cn('[&_[cmdk-group-heading]]:font-bold', '[&_[cmdk-group-heading]]:opacity-50')}
-                  >
-                    {result.messages.map((message, j) => (
-                      <CommandItem
-                        key={`${i}-${j}`}
-                        className={cn(
-                          theme.palette.mode === 'dark' ? 'bg-slate-600' : 'bg-slate-50',
-                          theme.palette.mode === 'dark' ? 'aria-selected:bg-slate-500' : 'aria-selected:bg-slate-200',
-                          'my-1',
-                          'cursor-pointer',
-                          'bg-opacity-50'
-                        )}
-                        onSelect={() => {
-                          sessionAction.switchCurrentSession(result.id)
-                          setTimeout(() => {
-                            scrollActions.scrollToMessage(message.id)
-                          }, 200)
-                          setOpen(false)
-                        }}
-                      >
-                        {/* 下面这个隐藏元素，是为了避免这个问题：
+            <BlockCodeCollapsedStateProvider defaultCollapsed={true}>
+              <Mark marks={[searchInput]}>
+                <CommandList>
+                  <CommandEmpty>{t('No results found')}</CommandEmpty>
+                  {searchResult.map((result, i) => (
+                    <CommandGroup
+                      key={i}
+                      heading={`${t('chat')} "${result.name}":`}
+                      className={cn('[&_[cmdk-group-heading]]:font-bold', '[&_[cmdk-group-heading]]:opacity-50')}
+                    >
+                      {result.messages.map((message, j) => (
+                        <CommandItem
+                          key={`${i}-${j}`}
+                          className={cn(
+                            theme.palette.mode === 'dark' ? 'bg-slate-600' : 'bg-slate-50',
+                            theme.palette.mode === 'dark' ? 'aria-selected:bg-slate-500' : 'aria-selected:bg-slate-200',
+                            'my-1',
+                            'cursor-pointer',
+                            'bg-opacity-50'
+                          )}
+                          onSelect={() => {
+                            switchCurrentSession(result.id)
+                            setTimeout(() => {
+                              scrollActions.scrollToMessage(result.id, message.id)
+                            }, 200)
+                            setOpen(false)
+                          }}
+                        >
+                          {/* 下面这个隐藏元素，是为了避免这个问题：
                                                         当搜索结果列表中出现重复的元素（相同的消息），此时键盘上下键选中第二条重复消息，继续按向下键会错误切换到第一条重复消息；并且当选中其中一条消息时，重复的消息同样会有选中的显示样式。
                                                         这些异常都会影响使用。我猜测可能和默认行为是根据元素内容进行判断的，因此加上这个唯一的隐藏元素可以规避问题。 */}
-                        <span className="hidden">
-                          {result.id}-{message.id}-{i}-{j}
-                        </span>
-                        <Message
-                          id={message.id}
-                          key={'msg-' + message.id}
-                          sessionId={result.id}
-                          sessionType={result.type || 'chat'}
-                          msg={message}
-                          className="w-full"
-                          hiddenButtonGroup
-                          small
-                          preferCollapsedCodeBlock
-                        />
-                      </CommandItem>
-                    ))}
-                  </CommandGroup>
-                ))}
-              </CommandList>
-            </Mark>
+                          <span className="hidden">
+                            {result.id}-{message.id}-{i}-{j}
+                          </span>
+                          <Message
+                            id={message.id}
+                            key={'msg-' + message.id}
+                            sessionId={result.id}
+                            sessionType={result.type || 'chat'}
+                            msg={message}
+                            className="w-full"
+                            buttonGroup="none"
+                            small
+                            assistantAvatarKey={result.assistantAvatarKey}
+                            sessionPicUrl={result.picUrl}
+                          />
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  ))}
+                </CommandList>
+              </Mark>
+            </BlockCodeCollapsedStateProvider>
           )}
         </Command>
       </DialogContent>
