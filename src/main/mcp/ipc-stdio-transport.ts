@@ -9,24 +9,110 @@ import { isEmpty } from 'lodash'
 import { v4 as uuidv4 } from 'uuid'
 import { getLogger } from '../util'
 import * as shellEnvModule from './shell-env'
+import { existsSync } from 'fs'
+import { join } from 'path'
+import { homedir } from 'os'
 const shellEnv: (shell?: string) => Promise<Record<string, string>> =
   ((shellEnvModule as any)?.shellEnv || (shellEnvModule as any)?.default || (shellEnvModule as any)) as any
 
+/**
+ * 获取 macOS 常见工具链路径的兜底列表
+ */
+function getCommonToolPaths(): string[] {
+  const paths = [
+    '/opt/homebrew/bin',      // Apple Silicon Homebrew
+    '/usr/local/bin',         // Intel Homebrew / 手动安装
+    '/opt/homebrew/sbin',
+    '/usr/local/sbin',
+    '/usr/bin',
+    '/bin',
+    '/usr/sbin',
+    '/sbin'
+  ]
+
+  // 添加用户特定路径
+  const userHome = homedir()
+  const userPaths = [
+    join(userHome, '.local/bin'),
+    join(userHome, 'bin'),
+    join(userHome, '.cargo/bin'),     // Rust
+    join(userHome, 'go/bin'),         // Go
+    join(userHome, '.npm-global/bin'), // npm global
+  ]
+
+  // 检查常见的 Node.js 版本管理器路径
+  const nodeManagerPaths = [
+    join(userHome, '.nvm/versions/node'),
+    join(userHome, '.asdf/shims'),
+    join(userHome, '.volta/bin'),
+    join(userHome, '.fnm'),
+  ]
+
+  // 对于 nvm，尝试找到当前版本
+  const nvmCurrentPath = join(userHome, '.nvm/versions/node')
+  if (existsSync(nvmCurrentPath)) {
+    try {
+      const fs = require('fs')
+      const versions = fs.readdirSync(nvmCurrentPath)
+      if (versions.length > 0) {
+        // 取最新版本（简单按字符串排序）
+        const latestVersion = versions.sort().pop()
+        nodeManagerPaths.push(join(nvmCurrentPath, latestVersion, 'bin'))
+      }
+    } catch (err) {
+      // 忽略读取错误
+    }
+  }
+
+  return [...paths, ...userPaths, ...nodeManagerPaths].filter(path => existsSync(path))
+}
+
+/**
+ * 合并和去重 PATH 环境变量
+ */
+function mergePaths(existingPath: string = '', additionalPaths: string[]): string {
+  const pathSeparator = process.platform === 'win32' ? ';' : ':'
+  const existingPaths = existingPath.split(pathSeparator).filter(Boolean)
+  const allPaths = [...existingPaths, ...additionalPaths]
+  
+  // 去重，保持顺序
+  const uniquePaths = Array.from(new Set(allPaths))
+  return uniquePaths.join(pathSeparator)
+}
+
 async function enhanceEnv(configEnv?: Record<string, string>) {
   let env: Record<string, string> = {}
+  
+  // 首先尝试从 shell 获取环境变量
   try {
     if (typeof shellEnv === 'function') {
       env = (await shellEnv()) || {}
+      logger.info('Successfully loaded shell environment')
     } else {
-      logger.warn('shell-env module unavailable or not a function, skipping shell environment augmentation')
+      logger.warn('shell-env module unavailable or not a function, using fallback')
     }
   } catch (err) {
-    logger.error('shell-env', err)
-    env = {}
+    logger.error('shell-env failed, using fallback:', err)
   }
+
+  // 如果 shell-env 失败或返回空，使用 process.env 作为基础
+  if (isEmpty(env)) {
+    env = { ...process.env }
+    logger.info('Using process.env as base environment')
+  }
+
+  // 增强 PATH：添加常见工具链路径
+  const commonPaths = getCommonToolPaths()
+  if (commonPaths.length > 0) {
+    env.PATH = mergePaths(env.PATH, commonPaths)
+    logger.info(`Enhanced PATH with ${commonPaths.length} additional paths:`, commonPaths)
+  }
+
+  // 合并用户配置的环境变量
   if (configEnv) {
     env = { ...env, ...configEnv }
   }
+
   return isEmpty(env) ? undefined : env
 }
 
